@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="zh-Hant-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的全螢幕 AI 聊天工作區 - 基礎核心版</title>
+    <style>
+                /* ===================================================
+           1. 顏色主題變數定義 (CSS Variables)
+           =================================================== */
+        :root {
+            /* 預設深色主題 */
+            --bg-main: #212121;
+            --bg-sidebar: #171717;
+            --bg-input: #2f2f2f;
+            --bg-row-user: #2f2f2f;
+            --bg-row-bot: #212121;
+            --border-color: #2f2f2f;
+            --text-main: #ececec;
+            --text-sub: #b4b4b4;
+            --btn-bg: #ececec;
+            --btn-text: #212121;
+        }
+
+        /* 淺色主題 */
+        [data-theme="light"] {
+            --bg-main: #ffffff;
+            --bg-sidebar: #f7f7f8;
+            --bg-input: #ffffff;
+            --bg-row-user: #f7f7f8;
+            --bg-row-bot: #ffffff;
+            --border-color: #e5e5e5;
+            --text-main: #2d2d2d;
+            --text-sub: #6e6e80;
+            --btn-bg: #10a37f;
+            --btn-text: #ffffff;
+        }
+
+        /* 護眼羊皮紙主題 */
+        [data-theme="sepia"] {
+            --bg-main: #f4ecd8;
+            --bg-sidebar: #e8dcbf;
+            --bg-input: #fdf6e3;
+            --bg-row-user: #e8dcbf;
+            --bg-row-bot: #f4ecd8;
+            --border-color: #d3c29d;
+            --text-main: #5b4636;
+            --text-sub: #8f725b;
+            --btn-bg: #8f725b;
+            --btn-text: #ffffff;
+        }
+
+        /* 1. 初始化頁面，確保撐滿螢幕 */
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-main); /* ⭐ 套用變數 */
+            color: var(--text-main);           /* ⭐ 套用變數 */
+            transition: background-color 0.2s, color 0.2s; /* 讓換色有流暢漸變效果 */
+        }
+
+
+        /* 主容器：左右分欄 */
+        .app-container {
+            display: flex;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            position:relative;
+        }
+
+        /* 2. 左側邊欄樣式 */
+        .sidebar {
+            width: 260px;
+            background-color: #171717;
+            display: flex;
+            flex-direction: column;
+            padding: 10px;
+            box-sizing: border-box;
+            border-right: 1px solid #2f2f2f;
+            flex-shrink: 0;
+        }
+
+        .new-chat-btn {
+            background-color: transparent;
+            color: var(--text-main);
+            border: 1px solid var(--text-sub);
+            border-radius: 6px;
+            padding: 12px;
+            font-size: 14px;
+            cursor: pointer;
+            text-align: left;
+            margin-bottom: 20px;
+            width: 100%;
+            box-sizing: border-box;
+            transition: color 0.2s, border-color 0.2s, background-color 0.2s;
+        }
+
+        .history-list {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            
+        }
+
+        .history-item {
+            padding: 10px 12px;
+            border-radius: 6px;
+            font-size: 14px;
+            color: var(--text-sub); /* ✅ 手動修改成這一行，讓它套用次要文字變數 */
+            cursor: pointer;
+            transition: color 0.2s, background-color 0.2s; /* 順便加上變色流暢動畫 */
+        }
+
+        /* 找到這一行，把原本寫死的背景色和文字顏色改成變數 */
+        .history-item.active, .history-item:hover {
+            background-color: var(--bg-input); /* 套用該主題的輸入框底色當背景 */
+            color: var(--text-main);           /* 套用該主題的主文字顏色 */
+        }
+
+
+        /* 3. 右側主聊天區樣式 */
+        .main-chat {
+            flex: 1;
+            /* ❌ 原本是：background-color: #212121; */
+            background-color: var(--bg-main); /* ✅ 修改成這行 */
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            overflow: hidden;
+            transition: background-color 0.2s; /* 加上變色動畫 */
+        }
+
+
+        /* 頂部列 */
+        .top-bar {
+            height: 56px;
+            border-bottom: 1px solid var(--border-color); /* ⭐ 改用變數邊框 */
+            display: flex;
+            align-items: center;
+            padding: 0 20px 0 60px;
+            font-size: 16px;
+            font-weight: 600;
+            flex-shrink: 0;
+        }
+
+
+        /* 中間對話紀錄區（滾動區） */
+        /* 1. 確保中間這個大容器是橫向水平排列 (row) */
+        .chat-messages {
+            flex: 1;
+            display: flex !important; /* ⭐ 加上 !important 強制執行 */
+            flex-direction: row !important; /* ⭐ 強制左右並排，絕對不允許上下排 */
+            width: 100%;
+            height: calc(100% - 56px); /* 扣掉頂部列的高度 */
+            overflow: hidden;
+        }
+
+        /* 2. 左分欄：文字指令區（佔據 50% 寬度） */
+        /* 修改：讓左欄變成一個獨立固定底部的聊天室 */
+        .prompt-side {
+            width: 50% !important;
+            height: 100%;
+            border-right: 1px solid var(--border-color);
+            box-sizing: border-box;
+            display: flex;         /* ⭐ 啟用 flex 排版 */
+            flex-direction: column;/* ⭐ 讓內容由上往下直向排列 */
+            overflow: hidden;      /* ⭐ 外層禁止溢出，改由內部的對話紀錄負責滾動 */
+        }
+        /* 全新加入：負責文字對話滾動的容器 */
+        .prompt-messages {
+            flex: 1;            /* 自動撐滿除了輸入框以外的所有剩餘空間 */
+            overflow-y: auto;   /* 只有文字對話會出現垂直滾動條 */
+            padding: 20px 0;
+            width: 100%;
+        }
+
+        /* 3. 右分欄：圖片展示區（佔據 50% 寬度） */
+        .image-side {
+            width: 50% !important; /* ⭐ 強制限制寬度剛好一半 */
+            height: 100%;
+            overflow-y: auto;
+            background-color: var(--bg-sidebar);
+            padding: 20px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+        }
+
+
+        /* 右邊生成出來的圖片樣式 */
+        .generated-image {
+            max-width: 90%; /* 限制圖片寬度不要撐爆畫面 */
+            max-height: 400px;
+            border-radius: 8px; /* 質感微圓角 */
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2); /* 讓圖片微微浮起來的陰影 */
+            border: 1px solid var(--border-color);
+        }
+        .message-row {
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            padding: 24px 20px;
+            box-sizing: border-box;
+        }
+
+        .bot-row { background-color: var(--bg-row-bot); }
+        /* 讓使用者的對話列底色有區隔 */
+        .user-row { background-color: var(--bg-row-user); }
+
+        .message-content {
+            max-width: 720px; 
+            width: 100%;
+            font-size: 16px; 
+            line-height: 1.6;
+        }
+
+        .avatar-label {
+            font-weight: bold;
+            margin-bottom: 6px;
+            display: block;
+            font-size: 14px;
+            color: #b4b4b4;
+        }
+
+        /* 4. 下方輸入區區塊（絕對固定的底部欄） */
+        .input-container {
+            width: 100%;
+            padding: 0 20px 24px 20px;
+            display: flex;
+            justify-content: center;
+            background-color: var(--bg-main); /* ✅ 手動修改成這一行 */
+            box-sizing: border-box;
+            flex-shrink: 0;
+            transition: background-color 0.2s; /* 順便加上變色流暢動畫 */
+        }
+
+        .input-box-wrapper {
+            max-width: 720px;
+            width: 100%;
+            /* ❌ 原本是：background-color: #2f2f2f; */
+            background-color: var(--bg-input); /* ✅ 修改成這行 */
+            border: 1px solid var(--border-color); /* ⭐ 改用變數邊框 */
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            padding: 8px 14px;
+            box-sizing: border-box;
+            transition: background-color 0.2s; /* 加上變色動畫 */
+        }
+
+
+        .attach-btn {
+            color: #b4b4b4; 
+            font-size: 28px;
+            font-weight: 300;
+            margin-right: 12px; 
+            cursor: pointer;
+            user-select: none;
+            flex-shrink: 0;
+        }
+
+        .chat-input {
+            flex: 1;
+            background-color: transparent; /* 保持透明，會直接透出外層 input-box-wrapper 的顏色 */
+            border: none;
+            color: var(--text-main); /* ✅ 手動修改成這一行，打的字就會隨著主題自動換色 */
+            font-size: 16px;
+            outline: none;
+            resize: none;          /* ❌ 禁用右下角手動拉大縮小的圖示 */
+            height: 24px;          /* 給它一個固定的初始高度 */
+            max-height: 200px;     /* ⭐ 限制最高長到 200px 就停住，避免把整個對話區擠扁 */
+            font-family: inherit;  /* 繼承原本的字體設定 */
+            line-height: 1.5;      /* 舒適的字體行高 */
+            padding: 2px 0;
+            box-sizing: border-box;
+        }
+
+        .send-btn {
+            background-color: var(--btn-bg);   /* ✅ 改用變數按鈕底色 */
+            color: var(--btn-text);             /* ✅ 改用變數按鈕文字色 */
+            border: none;
+            border-radius: 8px;
+            padding: 8px 16px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: background-color 0.2s, color 0.2s;
+        }
+
+        /* 5. 側邊欄收縮效果：寬度變 0 並且隱藏內容 */
+        .sidebar.collapsed {
+            width: 0;
+            padding: 10px 0;
+            border-right: none;
+            overflow: hidden; /* 確保裡面的文字不會溢出來 */
+        }
+
+        /* 讓側邊欄在收放時有流暢的滑動動畫 */
+        .sidebar {
+            width: 260px;
+            /* ❌ 原本是：background-color: #171717; */
+            background-color: var(--bg-sidebar); /* ✅ 修改成這行 */
+            display: flex;
+            flex-direction: column;
+            padding: 10px;
+            box-sizing: border-box;
+            border-right: 1px solid var(--border-color); /* ⭐ 順便把邊框也改用變數 */
+            flex-shrink: 0;
+            transition: width 0.3s ease, padding 0.3s ease, background-color 0.2s; /* 加上變色動畫 */
+        }
+
+
+        /* ☰ 收放按鈕的精美樣式 */
+        .toggle-sidebar-btn {
+            background: transparent;
+            border: none;
+            color: #b4b4b4;
+            font-size: 20px;
+            cursor: pointer;
+            padding: 10px;
+            border-radius: 6px;
+            transition: background-color 0.2s, color 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            align-self: flex-start; 
+            margin-bottom: 10px;
+            width: 40px;
+            height: 40px;
+            box-sizing: border-box;
+            z-index: 10;
+        }
+
+        .toggle-sidebar-btn:hover {
+            background-color: #2f2f2f;
+            color: white;
+}
+
+        /* 3. 關鍵魔法：當側邊欄收起時，把按鈕強制固定在畫面最左上角懸浮 */
+        .sidebar.collapsed .toggle-sidebar-btn {
+            position: fixed;
+            left: 10px;
+            top: 10px;
+            background-color: #212121; 
+            border: 1px solid #424242;
+        }
+
+        /* 4. 修改頂部列補白，預留 60px 寬度給收縮後的懸浮 ☰ 按鈕 */
+        .top-bar {
+            height: 56px;
+            border-bottom: 1px solid #2f2f2f;
+            display: flex;
+            align-items: center;
+            padding: 0 20px 0 60px; /* ⭐ 左邊 padding 改成 60px */
+            font-size: 16px;
+            font-weight: 600;
+            flex-shrink: 0;
+        }
+        /* ===================================================
+        5. 設定按鈕與彈出視窗專屬樣式
+        =================================================== */
+        /* 側邊欄最底部的設定按鈕 */
+        .settings-btn {
+            background-color: transparent;
+            color: #b4b4b4;
+            border: none;
+            border-top: 1px solid #2f2f2f;
+            padding: 15px 12px;
+            font-size: 14px;
+            cursor: pointer;
+            text-align: left;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            margin-top: auto; /* ⭐ 自動推到側邊欄的最底部 */
+            box-sizing: border-box;
+        }
+
+        .settings-btn:hover {
+            background-color: #212121;
+            color: white;
+        }
+
+        /* 遮罩背景（滿版半透明黑色） */
+        .modal-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100vw; height: 100vh;
+            background-color: rgba(0, 0, 0, 0.6);
+            display: none; /* ⭐ 預設是隱藏 (none)，點擊按鈕時 JS 會改成 flex 顯示 */
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        /* 小視窗本體卡片 */
+        .modal-content {
+            /* ❌ 原本是：background-color: #2f2f2f; */
+            background-color: var(--bg-input); /* ✅ 改用變數，會隨著主題變色 */
+            
+            /* ❌ 原本是：color: white; */
+            color: var(--text-main);           /* ✅ 改用變數 */
+            
+            width: 400px;
+            padding: 24px;
+            border-radius: 12px;
+            border: 1px solid var(--border-color); /* ⭐ 邊框也改用變數 */
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            transition: background-color 0.2s, color 0.2s;
+        }
+
+
+        .modal-header {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        /* 關閉視窗的 ✕ 按鈕 */
+        .close-modal-btn {
+            background: transparent;
+            border: none;
+            color: #b4b4b4;
+            font-size: 20px;
+            cursor: pointer;
+        }
+
+        .close-modal-btn:hover {
+            color: white;
+        }
+
+        .setting-group label {
+            display: block;
+            font-size: 14px;
+            color: #b4b4b4;
+            margin-bottom: 8px;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div class="app-container">
+        
+        <!-- 左側邊欄 -->
+        <aside class="sidebar">
+            <button class="toggle-sidebar-btn">☰</button>
+            <button class="new-chat-btn">＋ 新增對話</button>
+            <div class="history-list">
+                <div class="history-item active" data-id="init-chat">網頁前端開發學習</div>
+            </div>
+            
+            <!-- ⭐ 設定按鈕（確保 id 正確） -->
+            <button class="settings-btn" id="open-settings-btn">⚙️ 偏好設定</button>
+        </aside>
+
+        <!-- 右側主聊天區 -->
+        <main class="main-chat">
+            <div class="top-bar">AI 聊天工作室 v3.2</div>
+            
+<!-- 1. 找到原本的 .chat-messages 標籤，並將它連同內部歡迎詞，整段改成這樣： -->
+    <div class="chat-messages">
+        
+        <!-- 【左半分欄】：文字指令區 -->
+        <div class="prompt-side">
+            <div class="message-row bot-row">
+                <div class="message-content">
+                    <span class="avatar-label">AI 助手</span>
+                    歡迎來到圖片生成工作區！請在下方輸入您的畫面靈感描述...
+                </div>
+            </div>
+            
+            <!-- ⭐ 請把剪下來的輸入框，貼在 </div-prompt-side> 的正上方 -->
+            <div class="input-container">
+                <div class="input-box-wrapper">
+                    <input type="file" id="file-upload" accept="image/*" style="display: none;">
+                    <label for="file-upload" class="attach-btn">＋</label>
+                    <textarea class="chat-input" placeholder="給 AI 助手發送訊息..." rows="1"></textarea>
+                    <button class="send-btn">傳送</button>
+                </div>
+            </div>
+
+        </div> <!-- 👈 這是 prompt-side 的結束標籤 -->
+
+        <!-- 【右半分欄】：圖片展示區 -->
+        <div class="image-side" id="image-gallery">
+            <img class="generated-image" src="https://unsplash.com" alt="生成圖片範例">
+            <p style="color: var(--text-sub); font-size: 14px;">（產出的圖片結果會依序排列在此處）</p>
+        </div>
+
+    </div>
+
+        </main>
+
+    </div>
+
+    <!-- ⭐ 設定彈出小視窗（確保 id 與 JS 完全對上） -->
+    <div class="modal-overlay" id="settings-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span>網頁外觀設定</span>
+                <button class="close-modal-btn" id="close-settings-btn">✕</button>
+            </div>
+            <div class="setting-group">
+                <label>頁面功能測試</label>
+                    <select id="theme-selector" style="width: 100%; padding: 10px; border-radius: 6px; background: var(--bg-main); color: var(--text-main); border: 1px solid var(--border-color);">
+                    <option value="dark">極致深色 (預設)</option>
+                    <option value="light">簡約淺色</option>
+                    <option value="sepia">舒適護眼 (羊皮紙)</option>
+                </select>
+            </div>
+        </div>
+    </div>
+
+    <!-- 在這裡插入控制按鈕的 JavaScript 程式碼 -->
+    <script>
+        
+        const newChatBtn = document.querySelector('.new-chat-btn');
+        const chatMessages = document.querySelector('.chat-messages');
+        const historyList = document.querySelector('.history-list');
+        
+        // ⭐ 這裡新增抓取：輸入框和傳送按鈕
+        const chatInput = document.querySelector('.chat-input');
+        const sendBtn = document.querySelector('.send-btn');
+
+        let chatStorage = {
+            'init-chat': chatMessages.innerHTML
+        };
+        let currentChatId = 'init-chat';
+
+        // ==========================================
+        // 功能 A：點擊「＋ 新增對話」（修復雙欄消失版）
+        // ==========================================
+        newChatBtn.addEventListener('click', function() {
+            // ⭐ 1. 另外抓取左側專門放文字對話的區域，與右側專門放圖片的區域
+            const promptMessages = document.querySelector('.prompt-messages');
+            const imageGallery = document.getElementById('image-gallery');
+
+            // 先把當前聊到一半的整體大雙欄內容存回記憶體庫，免得別的房間紀錄壞掉
+            chatStorage[currentChatId] = chatMessages.innerHTML;
+
+            // 產生一個新的房間 ID
+            const newId = 'chat-' + Date.now();
+            const now = new Date();
+            const timeString = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')} 的新對話`;
+            
+            // 移除左邊歷史清單所有人高亮
+            document.querySelectorAll('.history-item').forEach(item => item.classList.remove('active'));
+
+            // 在左側歷史清單最上方長出一筆新紀錄，並給它高亮
+            const newHistoryItem = `<div class="history-item active" data-id="${newId}">${timeString}</div>`;
+            historyList.insertAdjacentHTML('afterbegin', newHistoryItem);
+
+            // ⭐ 2. 重置：我們「精準」地只清空並重置左邊的文字、右邊的圖片藝廊
+            // 左半邊：放一筆乾淨的新歡迎詞
+            promptMessages.innerHTML = `
+                <div class="message-row bot-row">
+                    <div class="message-content">
+                        <span class="avatar-label">AI 助手</span>
+                        您好！這是全新開啟的圖片生成對話。請在下方輸入您的畫面描述，我會在右側為您渲染作品。
+                    </div>
+                </div>
+            `;
+
+            // 右半邊：清空裡面所有照片，並放回一個預設的乾淨提示字（也可以放空的）
+            imageGallery.innerHTML = `
+                <p style="color: var(--text-sub); font-size: 14px;">（全新的藝廊畫布已準備就緒，產出結果將排列在此）</p>
+            `;
+
+            // ⭐ 3. 更新指針，並把「此時此刻這個完美的雙欄大 HTML」同步備份到新房間的記憶體裡
+            currentChatId = newId;
+            setTimeout(function() {
+                chatStorage[newId] = chatMessages.innerHTML;
+            }, 10);   
+        });
+
+        // ==========================================
+        // 功能 B：點擊左側歷史紀錄，切換舊對話
+        // ==========================================
+        historyList.addEventListener('click', function(e) {
+            const clickedItem = e.target.closest('.history-item');
+            if (!clickedItem) return;
+
+            chatStorage[currentChatId] = chatMessages.innerHTML;
+
+            document.querySelectorAll('.history-item').forEach(item => item.classList.remove('active'));
+            clickedItem.classList.add('active');
+
+            const targetId = clickedItem.getAttribute('data-id') || 'init-chat';
+            chatMessages.innerHTML = chatStorage[targetId];
+            currentChatId = targetId;
+        });
+
+        // ==========================================
+        // ⭐ 功能 C：發送訊息的核心邏輯
+        // ==========================================
+        function sendMessage() {
+            const promptMessages = document.querySelector('.prompt-messages'); 
+            const text = chatInput.value.trim();
+            if (text === '') return;
+
+            const userMessageHTML = `
+                <div class="message-row user-row">
+                    <div class="message-content">
+                        <span class="avatar-label" style="color: #3498db;">你</span>
+                        ${text}
+                    </div>
+                </div>
+            `;
+
+            promptMessages.insertAdjacentHTML('beforeend', userMessageHTML);
+            chatInput.value = '';
+            
+            // ⭐ 加上這一行：發送訊息後，強迫輸入框的高度縮水回原本的 24px 一行高
+            chatInput.style.height = '24px';
+            
+            promptMessages.scrollTop = promptMessages.scrollHeight; 
+            const chatMessages = document.querySelector('.chat-messages');
+            chatStorage[currentChatId] = chatMessages.innerHTML;
+        }
+
+
+        // 綁定點擊事件：按「傳送」按鈕時送出
+        sendBtn.addEventListener('click', sendMessage);
+
+        // 綁定鍵盤事件：在輸入框裡按下「Enter」鍵時也直接送出
+        chatInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+                // ==========================================
+        // 功能 D：控制左側邊欄收放
+        // ==========================================
+        const toggleSidebarBtn = document.querySelector('.toggle-sidebar-btn');
+        const sidebar = document.querySelector('.sidebar');
+
+        toggleSidebarBtn.addEventListener('click', function() {
+            // toggle 的意思是：如果 sidebar 本來沒有 collapsed 就加上它；如果有就拔掉它
+            sidebar.classList.toggle('collapsed');
+        });
+        // ==========================================
+        // 功能 E：控制設定選單小視窗的彈出與關閉
+        // ==========================================
+        const modal = document.getElementById('settings-modal');
+        const openSettingsBtn = document.getElementById('open-settings-btn');
+        const closeSettingsBtn = document.getElementById('close-settings-btn');
+        const themeSelector = document.getElementById('theme-selector');
+
+        // 點擊「⚙️ 偏好設定」按鈕 ＞ 顯示小視窗
+        openSettingsBtn.addEventListener('click', function() {
+            modal.style.display = 'flex';
+        });
+
+        // 點擊「✕」按鈕 ＞ 隱藏小視窗
+        closeSettingsBtn.addEventListener('click', function() {
+            modal.style.display = 'none';
+        });
+
+        // 貼心互動：點擊小視窗外圍（黑色透明區）也能直接關閉視窗
+        modal.addEventListener('click', function(e) {
+            if (e.target === modal) {
+                modal.style.display = 'none';
+            }
+        });
+        themeSelector.addEventListener('change', function(e) {
+                const selectedTheme = e.target.value;
+                // 透過修改網頁最頂層的屬性，觸發 CSS 變數切換顏色
+                document.documentElement.setAttribute('data-theme', selectedTheme);
+        });
+            // ==========================================
+            // 功能 F：夾帶檔案即時顯示在右側圖片區
+            // ==========================================
+            const fileUploadInput = document.getElementById('file-upload');
+            const imageGallery = document.getElementById('image-gallery');
+
+            // 當使用者選好檔案、按下確認時觸發 (change 事件)
+            fileUploadInput.addEventListener('change', function(e) {
+                const file = e.target.files[0]; // 抓取使用者選取的第一張檔案
+                
+                if (!file) return; // 防呆：如果沒選檔案就結束
+
+                // 建立一個網頁版的檔案讀取器
+                const reader = new FileReader();
+
+                // 當檔案成功讀取完畢後執行
+                reader.onload = function(event) {
+                    const imageUrl = event.target.result; // 這會把你的照片轉換成網頁看得懂的基地網址 (Base64)
+
+                    // 製作一段全新的圖片 HTML 標籤
+                    const newImageHTML = `
+                        <img class="generated-image" src="${imageUrl}" alt="上傳的圖片">
+                    `;
+
+                    // 把這張新圖片塞進右側圖片藝廊區的最頂端（或者用 beforeend 塞到最底端）
+                    imageGallery.insertAdjacentHTML('afterbegin', newImageHTML);
+                };
+
+                // 開始把照片讀取成網址格式
+                reader.readAsDataURL(file);
+            });
+            // ==========================================
+            // 全新加入：文字框自動向下延伸長高邏輯
+            // ==========================================
+            chatInput.addEventListener('input', function() {
+                // 先把高度調回初始狀態，這樣刪除文字時它才會自動縮小
+                this.style.height = '24px';
+                
+                // scrollHeight 代表目前裡面文字實際塞滿所需的總高度
+                let nextHeight = this.scrollHeight;
+                
+                // 讓輸入框的高度等於文字實際的高度
+                this.style.height = nextHeight + 'px';
+            });
+
+
+    </script>
+
+
+    <!-- 偏好設定的彈出小視窗（預設是隱藏的） -->
+    <div class="modal-overlay" id="settings-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span>網頁外觀設定</span>
+                <button class="close-modal-btn" id="close-settings-btn">✕</button>
+            </div>
+            
+            <div class="setting-group">
+                <label>頁面功能測試</label>
+                <p style="color: #b4b4b4; margin: 0; font-size: 14px;">小視窗已成功彈出！未來可以在這裡加入切換深淺色或調整字體功能。</p>
+            </div>
+        </div>
+    </div>
+
+</body>
+
+</body>
+</html>
