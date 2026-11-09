@@ -1,0 +1,22 @@
+[project]
+name = "LocalGenPhoto"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "watermelen63", email = "wumingxi63@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "pyside6>=6.12.0",
+]
+
+[project.scripts]
+LocalGenPhoto = "LocalGenPhoto:main"
+
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "LocalGenPhoto"
