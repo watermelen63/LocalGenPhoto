@@ -3,7 +3,7 @@ revision = 5
 requires-python = ">=3.11"
 
 [[package]]
-name = "pig"
+name = "localgenphoto"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
