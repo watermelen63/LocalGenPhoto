@@ -1,5 +1,12 @@
 [
   {
+    "id": "1794244067951",
+    "mode": "single",
+    "title": "單次生成圖片",
+    "titleEdited": false,
+    "messages": []
+  },
+  {
     "id": "1794156043183",
     "mode": "interactive",
     "title": "互動式生成圖片",
