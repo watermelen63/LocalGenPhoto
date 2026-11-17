@@ -5,24 +5,44 @@
     uvicorn server:app --host 127.0.0.1 --port 8000
 
 API：
-    GET  /models      列出可用模型與目前載入的模型
-    POST /generate    生圖，回傳 PNG（一次只跑一張，其他請求會排隊）
-    GET  /progress    目前生圖進度（前端用來更新進度條）
-    POST /unload      卸載目前模型，釋放顯存
+    GET  /models                  列出可用模型與目前載入的模型
+    POST /generate                生圖，儲存圖片與資料庫紀錄並回傳 PNG
+    GET  /progress                目前生圖進度（前端用來更新進度條）
+    POST /unload                  卸載目前模型，釋放顯存
+    GET  /history                 依照時間由新到舊讀取生成歷史紀錄
+    GET  /history/{id}/image      讀取歷史生成圖片檔案
 """
 
 import gc
 import io
 import json
+import math
+import sys
 import threading
 import time
 import urllib.request
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 import torch
 import diffusers
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+SRC_DIR = ROOT_DIR / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from LocalGenPhoto.database import (  # noqa: E402
+    add_generation,
+    get_generation_by_id,
+    get_generations,
+    init_db,
+    resolve_image_path,
+    save_generation_image,
+)
 
 # ---------------------------------------------------------------------------
 # 模型設定表：要加新模型，只要在這裡加一筆
@@ -77,7 +97,14 @@ DEFAULT_MODEL = "z-image-turbo"
 OLLAMA_URL = "http://127.0.0.1:11434"
 UNLOAD_OLLAMA_BEFORE_GENERATE = True  # 生圖前先請 Ollama 釋放顯存
 
-app = FastAPI(title="Local ImageGen Backend")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_db()
+    yield
+
+
+init_db()
+app = FastAPI(title="Local ImageGen Backend", lifespan=lifespan)
 
 # ---------------------------------------------------------------------------
 # 全域狀態
@@ -97,6 +124,8 @@ class GenerateRequest(BaseModel):
     steps: int | None = Field(None, ge=1, le=100)
     guidance: float | None = None
     seed: int = -1
+    aspect_ratio: str | None = None
+    style: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +233,13 @@ def unload():
     return {"ok": True}
 
 
+def _format_aspect_ratio(width: int, height: int, explicit: str | None) -> str:
+    if explicit:
+        return explicit
+    divisor = math.gcd(width, height)
+    return f"{width // divisor}:{height // divisor}"
+
+
 @app.post("/generate")
 def generate(req: GenerateRequest):
     # FastAPI 會把一般 def 放進執行緒池跑，所以 /progress 可以同時被查詢
@@ -257,12 +293,64 @@ def generate(req: GenerateRequest):
 
         buf = io.BytesIO()
         image.save(buf, format="PNG")
+        png_bytes = buf.getvalue()
+
+        image_rel_path = save_generation_image(png_bytes)
+        parameters = {
+            "seed": seed,
+            "width": req.width,
+            "height": req.height,
+            "aspect_ratio": _format_aspect_ratio(req.width, req.height, req.aspect_ratio),
+            "steps": steps,
+            "guidance": guidance,
+        }
+        if req.style:
+            parameters["style"] = req.style
+
+        generation_id = add_generation(
+            prompt=req.prompt,
+            negative_prompt=req.negative_prompt,
+            model_name=req.model,
+            parameters=parameters,
+            image_path=image_rel_path,
+        )
+
         return Response(
-            content=buf.getvalue(),
+            content=png_bytes,
             media_type="image/png",
             headers={
                 "X-Seed": str(seed),
                 "X-Model": req.model,
                 "X-Elapsed": f"{time.time() - _progress['started']:.2f}",
+                "X-Generation-Id": str(generation_id),
+                "X-Image-Path": image_rel_path,
             },
         )
+
+
+@app.get("/history")
+def list_history(limit: int = 50, offset: int = 0):
+    """依照建立時間由新到舊回傳生成歷史紀錄。"""
+    if limit < 1 or limit > 200:
+        raise HTTPException(400, "limit 必須介於 1 到 200 之間")
+    if offset < 0:
+        raise HTTPException(400, "offset 不可為負數")
+
+    items = get_generations(limit=limit, offset=offset)
+    for item in items:
+        item["image_url"] = f"/history/{item['id']}/image"
+    return {"items": items, "count": len(items)}
+
+
+@app.get("/history/{generation_id}/image")
+def get_history_image(generation_id: int):
+    """取得指定生成紀錄對應的 PNG 圖片。"""
+    record = get_generation_by_id(generation_id)
+    if record is None:
+        raise HTTPException(404, "找不到指定的生成紀錄")
+
+    file_path = resolve_image_path(record["image_path"])
+    if not file_path.is_file():
+        raise HTTPException(404, "找不到對應的圖片檔案")
+
+    return FileResponse(file_path, media_type="image/png")
