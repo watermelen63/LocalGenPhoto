@@ -1355,7 +1355,7 @@ class MainWindow(QMainWindow):
 # ==================== 啟動主流程 ====================
 
 def main() -> None:
-    app = QApplication(sys.argv)
+     QApplication(sys.argv)
 
     font = QFont()
     font.setFamilies(

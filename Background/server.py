@@ -23,6 +23,10 @@ import diffusers
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
+try:
+    from database import init_db, save_image_and_record, SessionLocal, GenerationRecord
+except ImportError:
+    from Background.database import init_db, save_image_and_record, SessionLocal, GenerationRecord
 
 # ---------------------------------------------------------------------------
 # 模型設定表：要加新模型，只要在這裡加一筆
@@ -78,6 +82,9 @@ OLLAMA_URL = "http://127.0.0.1:11434"
 UNLOAD_OLLAMA_BEFORE_GENERATE = True  # 生圖前先請 Ollama 釋放顯存
 
 app = FastAPI(title="Local ImageGen Backend")
+@app.on_event("startup")
+def on_startup():
+    init_db()
 
 # ---------------------------------------------------------------------------
 # 全域狀態
@@ -257,12 +264,61 @@ def generate(req: GenerateRequest):
 
         buf = io.BytesIO()
         image.save(buf, format="PNG")
+        png_bytes = buf.getvalue()
+        elapsed = round(time.time() - _progress["started"], 2)
+
+        # 存入硬碟並寫入 PostgreSQL
+        record = save_image_and_record(
+            png_bytes=png_bytes,
+            prompt=req.prompt,
+            negative_prompt=req.negative_prompt,
+            model_id=req.model,
+            width=req.width,
+            height=req.height,
+            steps=steps,
+            guidance=guidance,
+            seed=seed,
+            elapsed_sec=elapsed,
+        )
+
         return Response(
-            content=buf.getvalue(),
+            content=png_bytes,
             media_type="image/png",
             headers={
                 "X-Seed": str(seed),
                 "X-Model": req.model,
-                "X-Elapsed": f"{time.time() - _progress['started']:.2f}",
+                "X-Elapsed": str(elapsed),
+                "X-Image-Id": record.id,
             },
         )
+@app.get("/history")
+def get_history(limit: int = 20, offset: int = 0):
+    db = SessionLocal()
+    try:
+        records = (
+            db.query(GenerationRecord)
+            .order_by(GenerationRecord.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        return [
+            {
+                "id": r.id,
+                "prompt": r.prompt,
+                "model_id": r.model_id,
+                "width": r.width,
+                "height": r.height,
+                "steps": r.steps,
+                "guidance": r.guidance,
+                "seed": r.seed,
+                "elapsed_sec": r.elapsed_sec,
+                "file_path": r.file_path,
+                "is_favorite": r.is_favorite,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in records
+        ]
+    finally:
+        db.close()
+

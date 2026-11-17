@@ -1,0 +1,14 @@
+version: '3.8'
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: localgen_postgres
+    environment:
+      POSTGRES_USER: gen_admin
+      POSTGRES_PASSWORD: gen_password123
+      POSTGRES_DB: localgen_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
