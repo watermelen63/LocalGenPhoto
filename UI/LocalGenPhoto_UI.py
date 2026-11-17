@@ -37,14 +37,17 @@ from PySide6.QtCore import (
     QSize,
     Qt,
     QTimer,
+    QUrl,
     Signal,
 )
 from PySide6.QtGui import QFont, QPixmap, QTextDocument
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
     QApplication,
     QBoxLayout,
     QButtonGroup,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -54,6 +57,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QRadioButton,
     QScrollArea,
@@ -65,6 +69,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+ROOT_DIR = Path(__file__).resolve().parent.parent
+SRC_DIR = ROOT_DIR / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from LocalGenPhoto.database import (  # noqa: E402
+    get_generations,
+    init_db,
+    resolve_image_path,
+)
+
 
 # ==================== 基本設定 ====================
 
@@ -72,11 +87,18 @@ from PySide6.QtWidgets import (
 OLLAMA_ENDPOINT = "http://127.0.0.1:11434/api/chat"
 MODEL_NAME = "qwen3:4b"
 
+# 本地端生圖後端（Background/server.py）
+IMAGEGEN_BACKEND = "http://127.0.0.1:8000"
+
 # 本地 AI 的系統指示
 SYSTEM_PROMPT = "你是一個親切且專業的 AI 助手，請使用繁體中文回答。"
 
-# 取代 localStorage：紀錄存放在程式旁邊的 JSON 檔
-DATA_FILE = Path(__file__).with_name("chat_sessions.json")
+# 取代 localStorage：紀錄存放在 data/chat_sessions.json（若不存在則回退同資料夾）
+DATA_FILE = (
+    ROOT_DIR / "data" / "chat_sessions.json"
+    if (ROOT_DIR / "data").exists()
+    else Path(__file__).with_name("chat_sessions.json")
+)
 
 SIDEBAR_WIDTH = 260
 CONTENT_MAX_WIDTH = 850
@@ -103,20 +125,20 @@ COLORS = {
 
 STYLE_SHEET = """
 QWidget { color: @text-main; font-size: 14px; }
-QMainWindow, #central, #chatView, #singleCreateView { background: @bg-dark; }
+QMainWindow, #central, #chatView, #singleCreateView, #galleryView { background: @bg-dark; }
 
 QScrollArea { background: transparent; border: none; }
 QScrollArea > QWidget#qt_scrollarea_viewport { background: transparent; }
-#messagesContent, #workspaceContent, #historyContent { background: transparent; }
+#messagesContent, #workspaceContent, #historyContent, #galleryScrollContent { background: transparent; }
 
 /* ---------- 1. 側邊欄 ---------- */
 #sidebar { background: @bg-sidebar; border-right: 1px solid @border; }
 
-#btnNewChat {
+#btnNewChat, #btnGalleryNav {
     background: @bg-card; border: 1px solid @border; border-radius: 8px;
     padding: 12px; text-align: left; font-weight: 500;
 }
-#btnNewChat:hover { background: @hover; }
+#btnNewChat:hover, #btnGalleryNav:hover { background: @hover; }
 
 #creationOption { background: @bg-card; border: 1px solid @border; border-radius: 8px; }
 #creationOption:hover { background: @hover; }
@@ -197,7 +219,13 @@ QRadioButton#ratio:checked {
     color: white; font-size: 15px; font-weight: 700;
 }
 #btnGenerate:hover { background: #6f4428; }
+#btnGenerate:disabled { background: rgba(92, 52, 26, 0.45); }
 #statusText { color: @text-muted; font-size: 12px; }
+QProgressBar#genProgress {
+    background: @bg-dark; border: 1px solid @border; border-radius: 6px;
+    height: 10px; text-align: center; font-size: 10px;
+}
+QProgressBar#genProgress::chunk { background: @primary; border-radius: 5px; }
 
 #previewState {
     background: @bg-dark; border-radius: 12px; padding: 6px 10px;
@@ -211,6 +239,26 @@ QRadioButton#ratio:checked {
 #emptyTitle { font-size: 17px; font-weight: bold; }
 #emptyDesc { color: @text-muted; font-size: 13px; }
 #previewFooter { color: @text-muted; font-size: 12px; }
+
+/* ---------- 5. 歷史生成紀錄 / 作品牆 ---------- */
+#btnRefreshGallery {
+    background: @bg-dark; border: 1px solid @border; border-radius: 8px;
+    padding: 7px 12px; font-size: 12px; font-weight: 600;
+}
+#btnRefreshGallery:hover { background: @hover; }
+#galleryCard {
+    background: @bg-dark; border: 1px solid @border; border-radius: 10px;
+}
+#galleryCard:hover { background: @hover; border-color: @primary; }
+#galleryThumb {
+    background: @bg-card; border-radius: 8px; color: @text-muted; font-size: 12px;
+}
+#galleryPrompt { font-size: 13px; font-weight: 600; color: @text-main; }
+#galleryMeta { font-size: 11px; color: @text-muted; }
+#galleryEmpty {
+    background: @bg-dark; border: 1px dashed @border; border-radius: 10px;
+    padding: 28px; color: @text-muted; font-size: 13px;
+}
 """
 
 
@@ -424,6 +472,102 @@ class AIBridge(QObject):
         threading.Thread(target=worker, daemon=True).start()
 
 
+class ImageGenClient(QObject):
+    """封裝與本地生圖後端（Background/server.py）的溝通。"""
+
+    models_loaded = Signal(list)       # [{"id": ..., "label": ...}, ...]
+    models_failed = Signal(str)
+    progress = Signal(int, int)        # step, total
+    finished = Signal(QPixmap, dict)   # 圖片, 中繼資訊
+    failed = Signal(str)
+
+    def __init__(self, base_url: str = IMAGEGEN_BACKEND, parent: QObject | None = None):
+        super().__init__(parent)
+        self.base_url = base_url.rstrip("/")
+        self.net = QNetworkAccessManager(self)
+        self.timer = QTimer(self)
+        self.timer.setInterval(300)
+        self.timer.timeout.connect(self._poll_progress)
+
+    def fetch_models(self) -> None:
+        reply = self.net.get(QNetworkRequest(QUrl(f"{self.base_url}/models")))
+        reply.finished.connect(lambda: self._on_models(reply))
+
+    def _on_models(self, reply: QNetworkReply) -> None:
+        if reply.error() != QNetworkReply.NetworkError.NoError:
+            self.models_failed.emit(f"無法連線到生圖後端：{reply.errorString()}")
+        else:
+            try:
+                data = json.loads(bytes(reply.readAll()).decode("utf-8"))
+                self.models_loaded.emit(data.get("models", []))
+            except Exception as err:  # noqa: BLE001
+                self.models_failed.emit(f"解析模型清單失敗：{err}")
+        reply.deleteLater()
+
+    def generate(
+        self,
+        prompt: str,
+        model: str,
+        negative_prompt: str = "",
+        width: int = 1024,
+        height: int = 1024,
+        aspect_ratio: str = "1:1",
+        style: str | None = None,
+        seed: int = -1,
+    ) -> None:
+        req = QNetworkRequest(QUrl(f"{self.base_url}/generate"))
+        req.setHeader(QNetworkRequest.KnownHeaders.ContentTypeHeader, "application/json")
+        req.setTransferTimeout(30 * 60 * 1000)
+        payload = {
+            "prompt": prompt,
+            "model": model,
+            "negative_prompt": negative_prompt or None,
+            "width": width,
+            "height": height,
+            "aspect_ratio": aspect_ratio,
+            "style": style if style and style != "auto" else None,
+            "seed": seed,
+        }
+        reply = self.net.post(req, json.dumps(payload).encode("utf-8"))
+        reply.finished.connect(lambda: self._on_generated(reply))
+        self.timer.start()
+
+    def _on_generated(self, reply: QNetworkReply) -> None:
+        self.timer.stop()
+        data = bytes(reply.readAll())
+        if reply.error() != QNetworkReply.NetworkError.NoError:
+            try:
+                msg = json.loads(data.decode("utf-8")).get("detail") or reply.errorString()
+            except Exception:
+                msg = reply.errorString()
+            self.failed.emit(msg)
+        else:
+            pix = QPixmap()
+            pix.loadFromData(data, "PNG")
+            info = {
+                "seed": bytes(reply.rawHeader(b"X-Seed")).decode("utf-8", errors="ignore"),
+                "elapsed": bytes(reply.rawHeader(b"X-Elapsed")).decode("utf-8", errors="ignore"),
+                "model": bytes(reply.rawHeader(b"X-Model")).decode("utf-8", errors="ignore"),
+                "generation_id": bytes(reply.rawHeader(b"X-Generation-Id")).decode("utf-8", errors="ignore"),
+                "image_path": bytes(reply.rawHeader(b"X-Image-Path")).decode("utf-8", errors="ignore"),
+            }
+            self.finished.emit(pix, info)
+        reply.deleteLater()
+
+    def _poll_progress(self) -> None:
+        reply = self.net.get(QNetworkRequest(QUrl(f"{self.base_url}/progress")))
+        reply.finished.connect(lambda: self._on_progress(reply))
+
+    def _on_progress(self, reply: QNetworkReply) -> None:
+        if reply.error() == QNetworkReply.NetworkError.NoError:
+            try:
+                p = json.loads(bytes(reply.readAll()).decode("utf-8"))
+                self.progress.emit(int(p.get("step", 0)), int(p.get("total", 0)))
+            except Exception:
+                pass
+        reply.deleteLater()
+
+
 # ==================== 1. 側邊欄 ====================
 
 class HistoryItem(QFrame):
@@ -482,6 +626,7 @@ class HistoryItem(QFrame):
 class Sidebar(QFrame):
     single_create_clicked = Signal()
     interactive_create_clicked = Signal()
+    gallery_clicked = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -504,6 +649,11 @@ class Sidebar(QFrame):
         self.btn_new.setObjectName("btnNewChat")
         self.btn_new.setCursor(Qt.PointingHandCursor)
         header_layout.addWidget(self.btn_new)
+
+        self.btn_gallery = QPushButton("🖼  歷史生成紀錄 / 作品牆")
+        self.btn_gallery.setObjectName("btnGalleryNav")
+        self.btn_gallery.setCursor(Qt.PointingHandCursor)
+        header_layout.addWidget(self.btn_gallery)
 
         # 創作模式選單（預設隱藏）
         self.creation_menu = QWidget()
@@ -533,6 +683,7 @@ class Sidebar(QFrame):
         self.btn_new.clicked.connect(
             lambda: self.creation_menu.setVisible(not self.creation_menu.isVisible())
         )
+        self.btn_gallery.clicked.connect(lambda: self.gallery_clicked.emit())
         btn_single.clicked.connect(lambda: self.single_create_clicked.emit())
         btn_interactive.clicked.connect(lambda: self.interactive_create_clicked.emit())
 
@@ -759,12 +910,301 @@ class ChatView(QWidget):
             self.scroll.verticalScrollBar().setValue(maximum)
 
 
+# ==================== 2.5 歷史生成紀錄 / 作品牆 ====================
+
+class GalleryCard(QFrame):
+    """作品牆單張圖片卡片：縮圖 + Prompt + 參數摘要。"""
+
+    clicked = Signal(dict)
+
+    def __init__(self, record: dict, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.record = record
+        self.setObjectName("galleryCard")
+        self.setCursor(Qt.PointingHandCursor)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 12)
+        layout.setSpacing(8)
+
+        thumb = QLabel()
+        thumb.setObjectName("galleryThumb")
+        thumb.setFixedHeight(170)
+        thumb.setAlignment(Qt.AlignCenter)
+
+        img_path = resolve_image_path(record.get("image_path", ""))
+        pix = QPixmap(str(img_path)) if img_path.is_file() else QPixmap()
+        if not pix.isNull():
+            scaled = pix.scaled(260, 170, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            thumb.setPixmap(scaled)
+        else:
+            thumb.setText("找不到圖片檔案")
+        layout.addWidget(thumb)
+
+        prompt_text = record.get("prompt", "").strip() or "（無提示詞）"
+        prompt_label = ElidedLabel(prompt_text)
+        prompt_label.setObjectName("galleryPrompt")
+        prompt_label.setToolTip(prompt_text)
+        layout.addWidget(prompt_label)
+
+        params = record.get("parameters") or {}
+        if not isinstance(params, dict):
+            params = {}
+        ratio = params.get("aspect_ratio", "")
+        seed = params.get("seed", "")
+        model = record.get("model_name", "")
+        meta_parts = [p for p in (model, ratio, f"seed {seed}" if seed != "" else "") if p]
+        created_at = record.get("created_at", "")
+        meta_text = " · ".join(meta_parts)
+        if created_at:
+            meta_text = f"{meta_text}\n{created_at}" if meta_text else created_at
+
+        meta_label = make_label(meta_text, "galleryMeta", wrap=True)
+        layout.addWidget(meta_label)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit(self.record)
+        super().mousePressEvent(event)
+
+
+class GalleryDetailDialog(QDialog):
+    """點擊作品牆卡片後的詳情預覽視窗。"""
+
+    apply_requested = Signal(dict)
+
+    def __init__(self, record: dict, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.record = record
+        self.setWindowTitle(f"生成紀錄 #{record.get('id', '')}")
+        self.resize(620, 680)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+
+        img_label = QLabel()
+        img_label.setObjectName("previewCanvas")
+        img_label.setMinimumHeight(340)
+        img_label.setAlignment(Qt.AlignCenter)
+        img_path = resolve_image_path(record.get("image_path", ""))
+        pix = QPixmap(str(img_path)) if img_path.is_file() else QPixmap()
+        if not pix.isNull():
+            img_label.setPixmap(
+                pix.scaled(560, 360, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            )
+        else:
+            img_label.setText(f"找不到圖片檔案：{img_path}")
+        layout.addWidget(img_label, 1)
+
+        params = record.get("parameters") or {}
+        info_lines = [
+            f"模型：{record.get('model_name', '')}",
+            f"建立時間：{record.get('created_at', '')}",
+            f"檔案路徑：{record.get('image_path', '')}",
+            f"參數：{json.dumps(params, ensure_ascii=False)}",
+        ]
+        if record.get("negative_prompt"):
+            info_lines.append(f"負面提示詞：{record['negative_prompt']}")
+
+        prompt_box = QPlainTextEdit(record.get("prompt", ""))
+        prompt_box.setObjectName("field")
+        prompt_box.setReadOnly(True)
+        prompt_box.setFixedHeight(90)
+
+        layout.addWidget(make_label("圖片提示詞", "fieldLabel"))
+        layout.addWidget(prompt_box)
+        layout.addWidget(make_label("\n".join(info_lines), "galleryMeta", wrap=True))
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        btn_apply = QPushButton("套用到生成設定")
+        btn_apply.setObjectName("btnBack")
+        btn_apply.setCursor(Qt.PointingHandCursor)
+        btn_apply.clicked.connect(self._on_apply)
+        btn_close = QPushButton("關閉")
+        btn_close.setObjectName("btnBack")
+        btn_close.setCursor(Qt.PointingHandCursor)
+        btn_close.clicked.connect(self.accept)
+        btn_row.addWidget(btn_apply)
+        btn_row.addWidget(btn_close)
+        layout.addLayout(btn_row)
+
+    def _on_apply(self) -> None:
+        self.apply_requested.emit(self.record)
+        self.accept()
+
+
+class GallerySection(QFrame):
+    """可重用的「歷史生成紀錄 / 作品牆」區塊。"""
+
+    record_applied = Signal(dict)
+
+    def __init__(self, columns: int = 3, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("panel")
+        self._columns = max(1, columns)
+        self._records: list[dict] = []
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 22, 22, 22)
+        layout.setSpacing(14)
+
+        heading = QHBoxLayout()
+        titles = QVBoxLayout()
+        titles.setSpacing(4)
+        titles.addWidget(make_label("GALLERY", "eyebrow"))
+        titles.addWidget(make_label("歷史生成紀錄 / 作品牆", "panelTitle"))
+        heading.addLayout(titles, 1)
+
+        self.count_badge = make_label("共 0 筆", "previewState")
+        heading.addWidget(self.count_badge, 0, Qt.AlignVCenter)
+
+        btn_refresh = QPushButton("↻  重新整理")
+        btn_refresh.setObjectName("btnRefreshGallery")
+        btn_refresh.setCursor(Qt.PointingHandCursor)
+        btn_refresh.clicked.connect(self.reload_history)
+        heading.addWidget(btn_refresh, 0, Qt.AlignVCenter)
+        layout.addLayout(heading)
+
+        self.grid_host = QWidget()
+        self.grid_layout = QGridLayout(self.grid_host)
+        self.grid_layout.setContentsMargins(0, 0, 0, 0)
+        self.grid_layout.setSpacing(14)
+        layout.addWidget(self.grid_host)
+
+    def set_columns(self, columns: int) -> None:
+        columns = max(1, columns)
+        if columns == self._columns:
+            return
+        self._columns = columns
+        self._render_records()
+
+    def reload_history(self, limit: int = 60) -> None:
+        try:
+            self._records = get_generations(limit=limit)
+        except Exception as err:  # noqa: BLE001
+            self._records = []
+            self.count_badge.setText("讀取失敗")
+            clear_layout(self.grid_layout)
+            err_label = make_label(f"無法讀取歷史紀錄：{err}", "galleryEmpty", wrap=True)
+            err_label.setAlignment(Qt.AlignCenter)
+            self.grid_layout.addWidget(err_label, 0, 0)
+            return
+        self._render_records()
+
+    def _render_records(self) -> None:
+        clear_layout(self.grid_layout)
+        self.count_badge.setText(f"共 {len(self._records)} 筆")
+
+        if not self._records:
+            empty = make_label(
+                "尚無歷史生成紀錄。生圖完成後，圖片與提示詞會自動顯示在這裡。",
+                "galleryEmpty",
+                wrap=True,
+            )
+            empty.setAlignment(Qt.AlignCenter)
+            self.grid_layout.addWidget(empty, 0, 0)
+            return
+
+        for idx, record in enumerate(self._records):
+            card = GalleryCard(record)
+            card.clicked.connect(self._open_detail)
+            row = idx // self._columns
+            col = idx % self._columns
+            self.grid_layout.addWidget(card, row, col)
+
+        for col in range(self._columns):
+            self.grid_layout.setColumnStretch(col, 1)
+
+    def _open_detail(self, record: dict) -> None:
+        dialog = GalleryDetailDialog(record, self)
+        dialog.apply_requested.connect(self.record_applied.emit)
+        dialog.exec()
+
+
+class GalleryView(QWidget):
+    """獨立分頁顯示的完整「歷史生成紀錄 / 作品牆」。"""
+
+    toggle_sidebar_clicked = Signal()
+    back_clicked = Signal()
+    record_applied = Signal(dict)
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("galleryView")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self._build_header())
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        content = QWidget()
+        content.setObjectName("galleryScrollContent")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(20, 20, 20, 20)
+        content_layout.setSpacing(20)
+
+        self.gallery_section = GallerySection(columns=3)
+        self.gallery_section.record_applied.connect(self.record_applied.emit)
+        content_layout.addWidget(self.gallery_section)
+        content_layout.addStretch(1)
+
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
+
+    def _build_header(self) -> QFrame:
+        header = QFrame()
+        header.setObjectName("creationHeader")
+        header.setMinimumHeight(68)
+        row = QHBoxLayout(header)
+        row.setContentsMargins(24, 10, 24, 10)
+        row.setSpacing(14)
+
+        btn_toggle = QPushButton("☰", toolTip="切換側邊欄")
+        btn_toggle.setObjectName("menuToggle")
+        btn_toggle.setCursor(Qt.PointingHandCursor)
+        btn_toggle.clicked.connect(lambda: self.toggle_sidebar_clicked.emit())
+        row.addWidget(btn_toggle)
+
+        titles = QVBoxLayout()
+        titles.setSpacing(3)
+        titles.addWidget(make_label("IMAGE ARCHIVE", "eyebrow"))
+        titles.addWidget(make_label("歷史生成紀錄 / 作品牆", "creationTitle"))
+        row.addLayout(titles, 1)
+
+        btn_back = QPushButton("←  前往單次生圖")
+        btn_back.setObjectName("btnBack")
+        btn_back.setCursor(Qt.PointingHandCursor)
+        btn_back.clicked.connect(lambda: self.back_clicked.emit())
+        row.addWidget(btn_back)
+        return header
+
+    def reload_history(self) -> None:
+        self.gallery_section.reload_history()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        cols = 2 if self.width() < 900 else 3
+        self.gallery_section.set_columns(cols)
+
+
 # ==================== 3. 單次圖片生成工作區 ====================
 
 class SingleCreateView(QWidget):
     toggle_sidebar_clicked = Signal()
     back_clicked = Signal()
+    generation_completed = Signal()
 
+    DEFAULT_MODELS = [
+        ("z-image-turbo", "Z-Image Turbo (6B, Apache 2.0)"),
+        ("flux2-klein-4b", "FLUX.2 klein 4B (Apache 2.0)"),
+        ("ernie-image-turbo", "ERNIE-Image Turbo (8B, Apache 2.0)"),
+        ("sdxl", "SDXL (3.5B)"),
+    ]
     STYLES = [
         ("auto", "不指定"),
         ("realistic", "寫實攝影"),
@@ -781,29 +1221,50 @@ class SingleCreateView(QWidget):
         self.setObjectName("singleCreateView")
         self.reference_image_path: str | None = None
         self._narrow: bool | None = None
+        self._current_pixmap: QPixmap | None = None
+        self._pending_jobs: list[dict] = []
+        self._total_jobs = 0
+
+        self.client = ImageGenClient(IMAGEGEN_BACKEND, self)
+        self.client.models_loaded.connect(self._on_models_loaded)
+        self.client.models_failed.connect(self._on_models_failed)
+        self.client.progress.connect(self._on_progress)
+        self.client.finished.connect(self._on_generated)
+        self.client.failed.connect(self._on_generate_failed)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self._build_header())
 
-        # ---- 左右主要工作區 ----
+        # ---- 主要滾動內容（上方設定與預覽 + 下方作品牆） ----
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        workspace = QWidget()
-        workspace.setObjectName("workspaceContent")
-        self.workspace_layout = QBoxLayout(QBoxLayout.LeftToRight, workspace)
-        self.workspace_layout.setContentsMargins(20, 20, 20, 20)
+        container = QWidget()
+        container.setObjectName("workspaceContent")
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(20, 20, 20, 20)
+        container_layout.setSpacing(20)
+
+        self.workspace_layout = QBoxLayout(QBoxLayout.LeftToRight)
+        self.workspace_layout.setContentsMargins(0, 0, 0, 0)
         self.workspace_layout.setSpacing(20)
 
         self.settings_panel = self._build_settings_panel()
         self.preview_panel = self._build_preview_panel()
         self.workspace_layout.addWidget(self.settings_panel, 0)
         self.workspace_layout.addWidget(self.preview_panel, 1)
+        container_layout.addLayout(self.workspace_layout)
 
-        scroll.setWidget(workspace)
+        self.gallery_section = GallerySection(columns=3)
+        self.gallery_section.record_applied.connect(self.apply_record)
+        container_layout.addWidget(self.gallery_section)
+
+        scroll.setWidget(container)
         layout.addWidget(scroll, 1)
+
+        self.client.fetch_models()
 
     # ---------- 頂部標題列 ----------
 
@@ -890,6 +1351,13 @@ class SingleCreateView(QWidget):
         layout.addWidget(divider)
         layout.addSpacing(22)
 
+        # 生成模型
+        self.model_combo = QComboBox()
+        self.model_combo.setObjectName("field")
+        for model_id, label in self.DEFAULT_MODELS:
+            self.model_combo.addItem(label, model_id)
+        self._field(layout, "生成模型", self.model_combo)
+
         # 圖片風格
         self.style_combo = QComboBox()
         self.style_combo.setObjectName("field")
@@ -944,16 +1412,23 @@ class SingleCreateView(QWidget):
         layout.addSpacing(20)
 
         # 生成按鈕
-        btn_generate = QPushButton("✨  生成圖片")
-        btn_generate.setObjectName("btnGenerate")
-        btn_generate.setCursor(Qt.PointingHandCursor)
-        btn_generate.clicked.connect(self.handle_generate)
-        layout.addWidget(btn_generate)
+        self.btn_generate = QPushButton("✨  生成圖片")
+        self.btn_generate.setObjectName("btnGenerate")
+        self.btn_generate.setCursor(Qt.PointingHandCursor)
+        self.btn_generate.clicked.connect(self.handle_generate)
+        layout.addWidget(self.btn_generate)
+
+        # 進度條
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setObjectName("genProgress")
+        self.progress_bar.hide()
+        layout.addSpacing(10)
+        layout.addWidget(self.progress_bar)
 
         # 狀態提示
-        self.status_label = make_label("目前尚未連接圖片生成模型。", "statusText", wrap=True)
+        self.status_label = make_label("正在檢查生圖後端連線...", "statusText", wrap=True)
         self.status_label.setAlignment(Qt.AlignCenter)
-        layout.addSpacing(12)
+        layout.addSpacing(10)
         layout.addWidget(self.status_label)
         layout.addStretch(1)
         return panel
@@ -1025,13 +1500,17 @@ class SingleCreateView(QWidget):
         layout.addLayout(heading)
         layout.addSpacing(18)
 
-        # 預覽畫布
+        # 預覽畫布（空狀態 / 生成圖片切換）
         self.preview_canvas = QFrame()
         self.preview_canvas.setObjectName("previewCanvas")
         self.preview_canvas.setMinimumHeight(420)
         canvas_layout = QVBoxLayout(self.preview_canvas)
-        canvas_layout.setContentsMargins(24, 24, 24, 24)
-        canvas_layout.addStretch(1)
+        canvas_layout.setContentsMargins(16, 16, 16, 16)
+
+        self.preview_stack = QStackedWidget()
+        empty_page = QWidget()
+        empty_page_layout = QVBoxLayout(empty_page)
+        empty_page_layout.addStretch(1)
 
         empty = QWidget()
         empty.setMaximumWidth(350)
@@ -1049,15 +1528,43 @@ class SingleCreateView(QWidget):
             label.setAlignment(Qt.AlignCenter)
             empty_layout.addWidget(label)
 
-        canvas_layout.addWidget(empty, 0, Qt.AlignHCenter)
-        canvas_layout.addStretch(1)
+        empty_page_layout.addWidget(empty, 0, Qt.AlignHCenter)
+        empty_page_layout.addStretch(1)
+
+        self.preview_image_label = QLabel()
+        self.preview_image_label.setAlignment(Qt.AlignCenter)
+        self.preview_image_label.setMinimumSize(200, 200)
+
+        self.preview_stack.addWidget(empty_page)
+        self.preview_stack.addWidget(self.preview_image_label)
+        canvas_layout.addWidget(self.preview_stack, 1)
         layout.addWidget(self.preview_canvas, 1)
 
         # 底部說明
         layout.addSpacing(16)
-        layout.addWidget(make_label("ⓘ  目前為介面原型，尚未連接圖片生成模型。",
-                                    "previewFooter", wrap=True))
+        self.preview_footer = make_label(
+            f"ⓘ  後端位址：{IMAGEGEN_BACKEND}；生成完成後將自動儲存至 data/images/ 與資料庫。",
+            "previewFooter",
+            wrap=True,
+        )
+        layout.addWidget(self.preview_footer)
         return panel
+
+    def _set_preview_pixmap(self, pixmap: QPixmap) -> None:
+        self._current_pixmap = pixmap
+        self.preview_stack.setCurrentIndex(1)
+        self._refresh_preview_pixmap()
+
+    def _refresh_preview_pixmap(self) -> None:
+        if self._current_pixmap is None or self._current_pixmap.isNull():
+            return
+        target = self.preview_image_label.size()
+        if target.width() <= 0 or target.height() <= 0:
+            return
+        scaled = self._current_pixmap.scaled(
+            target, Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
+        self.preview_image_label.setPixmap(scaled)
 
     # ---------- 參考圖片 ----------
 
@@ -1091,21 +1598,69 @@ class SingleCreateView(QWidget):
         self.ref_name.set_full_text("")
         self.ref_wrap.hide()
 
-    # ---------- 生成 ----------
+    # ---------- 生成與後端事件 ----------
+
+    @staticmethod
+    def _compute_dimensions(aspect_ratio: str, base_res: int) -> tuple[int, int]:
+        ratios = {
+            "1:1": (1, 1),
+            "3:4": (3, 4),
+            "4:3": (4, 3),
+            "16:9": (16, 9),
+        }
+        rw, rh = ratios.get(aspect_ratio, (1, 1))
+        if rw >= rh:
+            width = base_res
+            height = max(256, (int(base_res * rh / rw) // 8) * 8)
+        else:
+            height = base_res
+            width = max(256, (int(base_res * rw / rh) // 8) * 8)
+        return width, height
 
     def collect_settings(self) -> dict:
-        """整理目前所有設定，之後串接圖片生成後端時可直接使用"""
+        """整理目前所有設定"""
         checked = self.ratio_group.checkedButton()
+        aspect_ratio = checked.text() if checked else "1:1"
+        base_res = int(self.resolution_combo.currentData() or 768)
+        width, height = self._compute_dimensions(aspect_ratio, base_res)
         return {
             "prompt": self.prompt_edit.toPlainText().strip(),
             "negative_prompt": self.negative_edit.toPlainText().strip(),
+            "model": self.model_combo.currentData() or "z-image-turbo",
             "style": self.style_combo.currentData(),
             "style_label": self.style_combo.currentText(),
-            "aspect_ratio": checked.text() if checked else "1:1",
-            "resolution": self.resolution_combo.currentData(),
-            "count": self.count_combo.currentData(),
+            "aspect_ratio": aspect_ratio,
+            "resolution": base_res,
+            "width": width,
+            "height": height,
+            "count": int(self.count_combo.currentData() or 1),
             "reference_image": self.reference_image_path,
         }
+
+    def apply_record(self, record: dict) -> None:
+        """將作品牆紀錄的提示詞與參數套用到左側設定。"""
+        self.prompt_edit.setPlainText(record.get("prompt", ""))
+        self.negative_edit.setPlainText(record.get("negative_prompt", ""))
+
+        model_name = record.get("model_name", "")
+        idx = self.model_combo.findData(model_name)
+        if idx >= 0:
+            self.model_combo.setCurrentIndex(idx)
+
+        params = record.get("parameters") or {}
+        if isinstance(params, dict):
+            ratio = params.get("aspect_ratio")
+            for btn in self.ratio_group.buttons():
+                if btn.text() == ratio:
+                    btn.setChecked(True)
+                    break
+
+        img_path = resolve_image_path(record.get("image_path", ""))
+        if img_path.is_file():
+            pix = QPixmap(str(img_path))
+            if not pix.isNull():
+                self._set_preview_pixmap(pix)
+                self.preview_state.setText(f"歷史紀錄 #{record.get('id', '')}")
 
     def handle_generate(self) -> None:
         settings = self.collect_settings()
@@ -1115,23 +1670,93 @@ class SingleCreateView(QWidget):
             self.prompt_edit.setFocus()
             return
 
-        self.status_label.setText(
-            f"提示詞已讀取。風格：{settings['style_label']}；"
-            f"比例：{settings['aspect_ratio']}；"
-            f"解析度：{settings['resolution']}；"
-            f"數量：{settings['count']} 張。"
-            " 尚未連接圖片生成模型，尚未實際生成圖片。"
-        )
-        self.preview_state.setText("等待模型連線")
+        self._total_jobs = settings["count"]
+        self._pending_jobs = [dict(settings) for _ in range(settings["count"])]
+        self.btn_generate.setDisabled(True)
+        self.progress_bar.setValue(0)
+        self.progress_bar.show()
+        self._start_next_job()
 
-        # 目前先保留負面提示詞資料供後續模型串接使用
-        print("負面提示詞：", settings["negative_prompt"])
+    def _start_next_job(self) -> None:
+        if not self._pending_jobs:
+            self.btn_generate.setDisabled(False)
+            self.progress_bar.hide()
+            return
+
+        job = self._pending_jobs.pop(0)
+        current_idx = self._total_jobs - len(self._pending_jobs)
+        self.preview_state.setText(f"生成中 ({current_idx}/{self._total_jobs})")
+        self.status_label.setText(
+            f"正在呼叫後端生成第 {current_idx}/{self._total_jobs} 張圖片"
+            f"（{job['width']}x{job['height']}，{job['model']}）..."
+        )
+        self.progress_bar.setValue(0)
+        self.client.generate(
+            prompt=job["prompt"],
+            model=job["model"],
+            negative_prompt=job["negative_prompt"],
+            width=job["width"],
+            height=job["height"],
+            aspect_ratio=job["aspect_ratio"],
+            style=job["style"],
+        )
+
+    def _on_models_loaded(self, models: list) -> None:
+        if not models:
+            return
+        current = self.model_combo.currentData()
+        self.model_combo.clear()
+        for m in models:
+            self.model_combo.addItem(m.get("label", m.get("id", "")), m.get("id", ""))
+        idx = self.model_combo.findData(current)
+        if idx >= 0:
+            self.model_combo.setCurrentIndex(idx)
+        self.status_label.setText("已連線到本地生圖後端。")
+
+    def _on_models_failed(self, _msg: str) -> None:
+        self.status_label.setText(
+            f"目前尚未偵測到生圖後端（{IMAGEGEN_BACKEND}），可先瀏覽歷史作品牆。"
+        )
+
+    def _on_progress(self, step: int, total: int) -> None:
+        if total > 0:
+            self.progress_bar.setMaximum(total)
+            self.progress_bar.setValue(step)
+
+    def _on_generated(self, pixmap: QPixmap, info: dict) -> None:
+        if not pixmap.isNull():
+            self._set_preview_pixmap(pixmap)
+
+        self.generation_completed.emit()
+
+        if self._pending_jobs:
+            self._start_next_job()
+            return
+
+        self.btn_generate.setDisabled(False)
+        self.progress_bar.hide()
+        self.preview_state.setText("生成完成")
+        self.status_label.setText(
+            f"完成：{info.get('model', '')}，seed={info.get('seed', '')}，"
+            f"耗時 {info.get('elapsed', '')} 秒，已儲存至資料庫。"
+        )
+
+    def _on_generate_failed(self, err_msg: str) -> None:
+        self._pending_jobs.clear()
+        self.btn_generate.setDisabled(False)
+        self.progress_bar.hide()
+        self.preview_state.setText("生成失敗")
+        self.status_label.setText(
+            f"生圖失敗：{err_msg}（請確認 Background/server.py 是否已啟動）"
+        )
 
     # ---------- 響應式：視窗變窄時改為上下排列 ----------
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._refresh_preview_pixmap()
         narrow = self.window().width() <= NARROW_BREAKPOINT
+        self.gallery_section.set_columns(2 if narrow else 3)
         if narrow == self._narrow:
             return
         self._narrow = narrow
@@ -1154,6 +1779,7 @@ class MainWindow(QMainWindow):
         self.resize(1280, 800)
         self.setMinimumSize(820, 560)
 
+        init_db()
         self.store = SessionStore(DATA_FILE)
         self.ai = AIBridge(self)
         self.ai.succeeded.connect(self._on_ai_success)
@@ -1171,9 +1797,11 @@ class MainWindow(QMainWindow):
         self.sidebar = Sidebar()
         self.chat_view = ChatView()
         self.single_view = SingleCreateView()
+        self.gallery_view = GalleryView()
         self.stack = QStackedWidget()
         self.stack.addWidget(self.chat_view)
         self.stack.addWidget(self.single_view)
+        self.stack.addWidget(self.gallery_view)
 
         row.addWidget(self.sidebar)
         row.addWidget(self.stack, 1)
@@ -1182,9 +1810,14 @@ class MainWindow(QMainWindow):
         # ---- 事件綁定 ----
         self.sidebar.single_create_clicked.connect(self._new_single)
         self.sidebar.interactive_create_clicked.connect(self._new_interactive)
+        self.sidebar.gallery_clicked.connect(self.show_gallery_view)
         self.chat_view.toggle_sidebar_clicked.connect(self.toggle_sidebar)
         self.single_view.toggle_sidebar_clicked.connect(self.toggle_sidebar)
         self.single_view.back_clicked.connect(self.show_chat_view)
+        self.single_view.generation_completed.connect(self.refresh_galleries)
+        self.gallery_view.toggle_sidebar_clicked.connect(self.toggle_sidebar)
+        self.gallery_view.back_clicked.connect(self.show_single_create_view)
+        self.gallery_view.record_applied.connect(self._apply_gallery_record)
         self.chat_view.input.send_requested.connect(self.handle_send_message)
         self.chat_view.btn_send.clicked.connect(lambda: self.handle_send_message())
 
@@ -1203,12 +1836,28 @@ class MainWindow(QMainWindow):
 
         self.render_sidebar()
         self.render_messages()
+        self.refresh_galleries()
         self.show_session_view(self.store.current())
+
+    def refresh_galleries(self) -> None:
+        """從 SQLite 資料庫重新載入歷史生成紀錄到作品牆。"""
+        self.single_view.gallery_section.reload_history()
+        self.gallery_view.reload_history()
+
+    def _apply_gallery_record(self, record: dict) -> None:
+        self.single_view.apply_record(record)
+        self.show_single_create_view()
 
     # ---------- 畫面切換 ----------
 
     def show_single_create_view(self) -> None:
+        self.single_view.gallery_section.reload_history()
         self.stack.setCurrentWidget(self.single_view)
+        self.sidebar.hide_menu()
+
+    def show_gallery_view(self) -> None:
+        self.gallery_view.reload_history()
+        self.stack.setCurrentWidget(self.gallery_view)
         self.sidebar.hide_menu()
 
     def show_chat_view(self) -> None:
