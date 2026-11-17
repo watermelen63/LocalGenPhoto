@@ -10,7 +10,7 @@
   * 左側邊欄：新增創作（單次生成 / 互動式生成）、歷史紀錄（重新命名、刪除）、收合
   * 互動式生成圖片：聊天畫面，呼叫本地端 Ollama（qwen3:4b），AI 回覆以 Markdown 顯示
   * 單次圖片生成：提示詞、負面提示詞、風格、比例、解析度、數量、參考圖片、預覽區
-  * 紀錄儲存：原本的 localStorage 改為同資料夾下的 chat_sessions.json
+  * 紀錄儲存：原本的 localStorage 改為專案 data/ 資料夾下的 chat_sessions.json
 
 執行前準備：
     ollama pull qwen3:4b      # 並確認 Ollama 已在背景執行
@@ -76,7 +76,7 @@ MODEL_NAME = "qwen3:4b"
 SYSTEM_PROMPT = "你是一個親切且專業的 AI 助手，請使用繁體中文回答。"
 
 # 取代 localStorage：紀錄存放在程式旁邊的 JSON 檔
-DATA_FILE = Path(__file__).with_name("chat_sessions.json")
+DATA_FILE = Path(__file__).resolve().parent.parent / "data" / "chat_sessions.json"
 
 SIDEBAR_WIDTH = 260
 CONTENT_MAX_WIDTH = 850
@@ -321,6 +321,7 @@ class SessionStore:
 
     def save(self) -> None:
         """將所有創作與對話紀錄儲存到 JSON 檔"""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(
             json.dumps(self.sessions, ensure_ascii=False, indent=2), encoding="utf-8"
         )
