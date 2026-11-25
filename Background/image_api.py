@@ -45,6 +45,7 @@ from llm_api import (
     SingleGenerationRequest,
     _conversations,
     call_llm,
+    translate_to_english,
     error_response,
     get_conversation,
     new_request_id,
@@ -222,7 +223,16 @@ def handle_single(req: SingleGenerationRequest):
     if req.input_image is not None:
         return error_response(400, "INPUT_IMAGE_NOT_SUPPORTED", "目前尚未支援 input_image 參考圖片。")
 
-    prompt = f"{req.prompt}, {req.style} style"
+    # 多一步：先用 LLM 把提示詞與風格翻成英文，再交給生圖引擎
+    try:
+        en = translate_to_english(req.prompt, req.style)
+    except LLMError as err:
+        return error_response(503, "LLM_UNAVAILABLE", str(err), retryable=True)
+    style = en["style"]
+    if style and not style.lower().endswith("style"):
+        style += " style"
+    prompt = f"{en['prompt']}, {style}" if style else en["prompt"]
+    print(f"[translate] {req.prompt!r} / {req.style!r} -> {prompt!r}")
     w, h = req.resolution.width, req.resolution.height
     images = []
     try:

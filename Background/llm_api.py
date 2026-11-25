@@ -41,6 +41,13 @@ SYSTEM_PROMPT = """你是生圖助手的需求分析器。根據整段對話，�
 - 主題、場景大致明確就直接 need_more_info=false，風格等細節自行補得合理即可。
 - 若使用者是在修改既有圖片（會標註「[修改]」），image_prompt 要寫成完整的新提示詞，保留先前提示詞中未被要求改動的部分。"""
 
+TRANSLATE_PROMPT = """你是生圖提示詞翻譯器。把使用者給的「圖片提示詞」與「圖片風格」翻譯成英文，供生圖模型使用。
+只輸出一個 JSON 物件，不要有其他文字，格式如下：
+{"prompt": "英文圖片提示詞", "style": "英文圖片風格（簡短詞組）"}
+規則：
+- 忠實翻譯，不要增刪或改寫使用者要表達的內容；已經是英文的部分原樣保留。
+- 風格若為「不指定」或空白，style 輸出空字串。"""
+
 app = FastAPI(title="Local ImageGen LLM API")
 
 
@@ -130,10 +137,11 @@ class LLMError(RuntimeError):
     pass
 
 
-def call_llm(messages: list[dict]) -> dict:
+def _ask_ollama(system_prompt: str, messages: list[dict]) -> dict:
+    """送給本地 Ollama，回傳解析後的 JSON 物件。"""
     body = json.dumps({
         "model": MODEL_NAME,
-        "messages": [{"role": "system", "content": SYSTEM_PROMPT}, *messages],
+        "messages": [{"role": "system", "content": system_prompt}, *messages],
         "stream": False,
         "format": "json",
         "think": False,
@@ -151,12 +159,28 @@ def call_llm(messages: list[dict]) -> dict:
         raise LLMError(f"無法連線到本地 AI（{err.reason}），請確認 Ollama 是否已啟動。") from err
     except (KeyError, json.JSONDecodeError) as err:
         raise LLMError("LLM 回傳的格式無法解析。") from err
+    if not isinstance(result, dict):
+        raise LLMError("LLM 回傳的格式無法解析。")
+    return result
 
+
+def call_llm(messages: list[dict]) -> dict:
+    result = _ask_ollama(SYSTEM_PROMPT, messages)
     return {
         "need_more_info": bool(result.get("need_more_info")),
         "question": str(result.get("question") or "").strip(),
         "image_prompt": str(result.get("image_prompt") or "").strip(),
     }
+
+
+def translate_to_english(prompt: str, style: str) -> dict:
+    """把使用者填的圖片提示詞與風格翻成英文，回傳 {"prompt": ..., "style": ...}。"""
+    user = json.dumps({"prompt": prompt, "style": style}, ensure_ascii=False)
+    result = _ask_ollama(TRANSLATE_PROMPT, [{"role": "user", "content": user}])
+    en_prompt = str(result.get("prompt") or "").strip()
+    if not en_prompt:
+        raise LLMError("LLM 沒有回傳翻譯後的提示詞。")
+    return {"prompt": en_prompt, "style": str(result.get("style") or "").strip()}
 
 
 def run_image_engine(image_prompt: str, req) -> list[dict]:

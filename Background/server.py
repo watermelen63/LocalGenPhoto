@@ -17,10 +17,12 @@ import json
 import threading
 import time
 import urllib.request
+from pathlib import Path
 
 import torch
 import diffusers
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -105,6 +107,18 @@ UNLOAD_OLLAMA_BEFORE_GENERATE = True  # 生圖前先請 Ollama 釋放顯存
 
 app = FastAPI(title="Local ImageGen Backend")
 
+# 前端 HTML 若是直接用檔案開啟（file://）也要能呼叫 API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 前端送出的創作紀錄（prompt/style/proportion/resolution/num/example）存放位置
+CHAT_SESSIONS_PATH = Path(__file__).resolve().parent.parent / "data" / "chat_sessions.json"
+_sessions_lock = threading.Lock()
+
 # ---------------------------------------------------------------------------
 # 全域狀態
 # ---------------------------------------------------------------------------
@@ -167,17 +181,8 @@ def load_quantized_components(cfg: dict, dtype) -> dict:
         nf4_text_encoder : 子資料夾名稱 → 用 bitsandbytes 量化成 4-bit 的 T5 文字編碼器
     """
     components = {}
-    if cfg.get("gguf_transformer"):
-        from diffusers import FluxTransformer2DModel, GGUFQuantizationConfig
-
-        print(f"[model] loading GGUF transformer {cfg['gguf_transformer']}")
-        components["transformer"] = FluxTransformer2DModel.from_single_file(
-            cfg["gguf_transformer"],
-            config=cfg["repo"],
-            subfolder="transformer",
-            quantization_config=GGUFQuantizationConfig(compute_dtype=dtype),
-            torch_dtype=dtype,
-        )
+    # 順序很重要：T5 原檔 9.5GB，要趁 RAM 還空的時候先載入並量化到 GPU（約 3GB 顯存），
+    # 之後才載 GGUF transformer（6.8GB 放 RAM）。反過來的話 16GB RAM 會不夠（os error 1455）。
     if cfg.get("nf4_text_encoder"):
         from transformers import BitsAndBytesConfig, T5EncoderModel
 
@@ -191,6 +196,18 @@ def load_quantized_components(cfg: dict, dtype) -> dict:
                 bnb_4bit_quant_type="nf4",
                 bnb_4bit_compute_dtype=dtype,
             ),
+            torch_dtype=dtype,
+        )
+        gc.collect()
+    if cfg.get("gguf_transformer"):
+        from diffusers import FluxTransformer2DModel, GGUFQuantizationConfig
+
+        print(f"[model] loading GGUF transformer {cfg['gguf_transformer']}")
+        components["transformer"] = FluxTransformer2DModel.from_single_file(
+            cfg["gguf_transformer"],
+            config=cfg["repo"],
+            subfolder="transformer",
+            quantization_config=GGUFQuantizationConfig(compute_dtype=dtype),
             torch_dtype=dtype,
         )
     return components
@@ -328,3 +345,24 @@ def generate(req: GenerateRequest):
                 "X-Elapsed": f"{time.time() - _progress['started']:.2f}",
             },
         )
+
+
+# ---------------------------------------------------------------------------
+# 創作紀錄：前端把整份 sessions 送來，寫進 data/chat_sessions.json
+# ---------------------------------------------------------------------------
+@app.get("/sessions")
+def get_sessions():
+    with _sessions_lock:
+        if not CHAT_SESSIONS_PATH.exists():
+            return []
+        return json.loads(CHAT_SESSIONS_PATH.read_text(encoding="utf-8") or "[]")
+
+
+@app.put("/sessions")
+def save_sessions(sessions: list[dict]):
+    with _sessions_lock:
+        CHAT_SESSIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CHAT_SESSIONS_PATH.write_text(
+            json.dumps(sessions, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    return {"ok": True, "count": len(sessions)}
