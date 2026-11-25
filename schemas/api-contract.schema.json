@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/schemas/image-generation-api.schema.json",
+  "title": "AI Image Generation API Contract",
+  "description": "Reusable JSON Schemas for the AI image-generation API request and response payloads.",
+  "$defs": {
+    "positiveInteger": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "sourceImage": {
+      "type": "object",
+      "properties": {
+        "image_id": { "type": "string", "minLength": 1 },
+        "version": { "$ref": "#/$defs/positiveInteger" }
+      },
+      "required": ["image_id", "version"],
+      "additionalProperties": false
+    },
+    "aspectRatio": {
+      "type": "object",
+      "properties": {
+        "width": { "$ref": "#/$defs/positiveInteger" },
+        "height": { "$ref": "#/$defs/positiveInteger" }
+      },
+      "required": ["width", "height"],
+      "additionalProperties": false
+    },
+    "resolution": {
+      "type": "object",
+      "properties": {
+        "width": { "$ref": "#/$defs/positiveInteger" },
+        "height": { "$ref": "#/$defs/positiveInteger" }
+      },
+      "required": ["width", "height"],
+      "additionalProperties": false
+    },
+    "inputImage": {
+      "type": "object",
+      "properties": {
+        "asset_id": { "type": "string", "minLength": 1 }
+      },
+      "required": ["asset_id"],
+      "additionalProperties": false
+    },
+    "chatRequest": {
+      "type": "object",
+      "properties": {
+        "flow": { "const": true },
+        "conversation_id": { "type": "string", "minLength": 1 },
+        "operation": { "enum": ["generate", "edit"] },
+        "message": { "type": "string", "minLength": 1 },
+        "source_image": { "$ref": "#/$defs/sourceImage" },
+        "input_image": { "$ref": "#/$defs/inputImage" }
+      },
+      "required": ["flow", "conversation_id", "operation", "message"],
+      "allOf": [
+        {
+          "if": {
+            "properties": { "operation": { "const": "edit" } },
+            "required": ["operation"]
+          },
+          "then": { "required": ["source_image"] }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "singleGenerationRequest": {
+      "type": "object",
+      "properties": {
+        "flow": { "const": false },
+        "prompt": { "type": "string", "minLength": 1 },
+        "style": { "type": "string", "minLength": 1 },
+        "aspect_ratio": { "$ref": "#/$defs/aspectRatio" },
+        "resolution": { "$ref": "#/$defs/resolution" },
+        "count": { "$ref": "#/$defs/positiveInteger" },
+        "input_image": { "$ref": "#/$defs/inputImage" }
+      },
+      "required": ["flow", "prompt", "style", "aspect_ratio", "resolution", "count"],
+      "additionalProperties": false
+    },
+    "request": {
+      "title": "Image Generation Request",
+      "oneOf": [
+        { "$ref": "#/$defs/chatRequest" },
+        { "$ref": "#/$defs/singleGenerationRequest" }
+      ]
+    },
+    "imageResult": {
+      "type": "object",
+      "properties": {
+        "image_id": { "type": "string", "minLength": 1 },
+        "version": { "$ref": "#/$defs/positiveInteger" },
+        "parent_image_id": { "type": ["string", "null"] },
+        "url": { "type": "string", "format": "uri-reference", "minLength": 1 },
+        "width": { "$ref": "#/$defs/positiveInteger" },
+        "height": { "$ref": "#/$defs/positiveInteger" }
+      },
+      "required": ["image_id", "version", "parent_image_id", "url", "width", "height"],
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "retryable": { "type": "boolean" }
+      },
+      "required": ["code", "message", "retryable"],
+      "additionalProperties": false
+    },
+    "response": {
+      "title": "Image Generation Response",
+      "type": "object",
+      "properties": {
+        "request_id": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["needs_clarification", "completed", "failed"] },
+        "conversation_id": { "type": "string", "minLength": 1 },
+        "need_more_info": { "type": "boolean" },
+        "question": { "type": "string", "minLength": 1 },
+        "images": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/imageResult" },
+          "minItems": 1
+        },
+        "error": { "$ref": "#/$defs/error" }
+      },
+      "required": ["request_id", "status"],
+      "allOf": [
+        {
+          "if": {
+            "properties": { "status": { "const": "needs_clarification" } },
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["conversation_id", "need_more_info", "question"],
+            "properties": { "need_more_info": { "const": true } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "status": { "const": "completed" } },
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["images"],
+            "properties": { "need_more_info": { "const": false } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "status": { "const": "failed" } },
+            "required": ["status"]
+          },
+          "then": { "required": ["error"] }
+        }
+      ],
+      "additionalProperties": false
+    }
+  }
+}

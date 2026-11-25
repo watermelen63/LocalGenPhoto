@@ -17,10 +17,12 @@ import json
 import threading
 import time
 import urllib.request
+from pathlib import Path
 
 import torch
 import diffusers
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -61,6 +63,32 @@ MODELS = {
         "offload": True,
         "extra": {"use_pe": False},  # Prompt Enhancer 會多吃顯存，16GB 先關掉
     },
+    # FLUX.1（12B）原始 bf16 約 34GB，8GB 顯存 + 16GB RAM 放不下，所以：
+    #   transformer 用預先量化好的 GGUF Q4（約 6.8GB），T5 文字編碼器載入時量化成 NF4（約 3GB）
+    #   顯存不夠時可把 Q4_K_S 換成 Q3_K_S / Q2_K（品質會下降）
+    "flux1-schnell": {
+        "label": "FLUX.1 schnell (12B GGUF Q4, Apache 2.0)",
+        "cls": "FluxPipeline",
+        "repo": "black-forest-labs/FLUX.1-schnell",
+        "steps": 4,
+        "guidance": 0.0,
+        "offload": True,
+        "extra": {"max_sequence_length": 256},  # schnell 最多 256
+        "gguf_transformer": "https://huggingface.co/city96/FLUX.1-schnell-gguf/blob/main/flux1-schnell-Q4_K_S.gguf",
+        "nf4_text_encoder": "text_encoder_2",
+    },
+    "flux1-dev": {
+        # 非商用授權，需先在 Hugging Face 同意條款並 `hf auth login`
+        "label": "FLUX.1 dev (12B GGUF Q4, non-commercial)",
+        "cls": "FluxPipeline",
+        "repo": "black-forest-labs/FLUX.1-dev",
+        "steps": 28,
+        "guidance": 3.5,
+        "offload": True,
+        "extra": {"max_sequence_length": 512},
+        "gguf_transformer": "https://huggingface.co/city96/FLUX.1-dev-gguf/blob/main/flux1-dev-Q4_K_S.gguf",
+        "nf4_text_encoder": "text_encoder_2",
+    },
     "sdxl": {
         "label": "SDXL (3.5B)",
         "cls": "StableDiffusionXLPipeline",
@@ -78,6 +106,18 @@ OLLAMA_URL = "http://127.0.0.1:11434"
 UNLOAD_OLLAMA_BEFORE_GENERATE = True  # 生圖前先請 Ollama 釋放顯存
 
 app = FastAPI(title="Local ImageGen Backend")
+
+# 前端 HTML 若是直接用檔案開啟（file://）也要能呼叫 API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 前端送出的創作紀錄（prompt/style/proportion/resolution/num/example）存放位置
+CHAT_SESSIONS_PATH = Path(__file__).resolve().parent.parent / "data" / "chat_sessions.json"
+_sessions_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # 全域狀態
@@ -135,6 +175,44 @@ def unload_pipe():
         free_vram()
 
 
+def load_quantized_components(cfg: dict, dtype) -> dict:
+    """依 MODELS 設定先載入量化過的元件，再當作參數傳給 from_pretrained（這些元件就不會重複下載）。
+        gguf_transformer : GGUF 檔網址 → transformer
+        nf4_text_encoder : 子資料夾名稱 → 用 bitsandbytes 量化成 4-bit 的 T5 文字編碼器
+    """
+    components = {}
+    # 順序很重要：T5 原檔 9.5GB，要趁 RAM 還空的時候先載入並量化到 GPU（約 3GB 顯存），
+    # 之後才載 GGUF transformer（6.8GB 放 RAM）。反過來的話 16GB RAM 會不夠（os error 1455）。
+    if cfg.get("nf4_text_encoder"):
+        from transformers import BitsAndBytesConfig, T5EncoderModel
+
+        name = cfg["nf4_text_encoder"]
+        print(f"[model] loading {name} as NF4")
+        components[name] = T5EncoderModel.from_pretrained(
+            cfg["repo"],
+            subfolder=name,
+            quantization_config=BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=dtype,
+            ),
+            torch_dtype=dtype,
+        )
+        gc.collect()
+    if cfg.get("gguf_transformer"):
+        from diffusers import FluxTransformer2DModel, GGUFQuantizationConfig
+
+        print(f"[model] loading GGUF transformer {cfg['gguf_transformer']}")
+        components["transformer"] = FluxTransformer2DModel.from_single_file(
+            cfg["gguf_transformer"],
+            config=cfg["repo"],
+            subfolder="transformer",
+            quantization_config=GGUFQuantizationConfig(compute_dtype=dtype),
+            torch_dtype=dtype,
+        )
+    return components
+
+
 def load_pipe(model_id: str):
     """載入指定模型；如果已經是目前的模型就直接回傳。"""
     global _pipe, _pipe_id
@@ -155,7 +233,8 @@ def load_pipe(model_id: str):
     dtype = torch.float16 if cfg.get("dtype") == "float16" else torch.bfloat16
     print(f"[model] loading {model_id} from {cfg['repo']} ...")
     t0 = time.time()
-    pipe = pipe_cls.from_pretrained(cfg["repo"], torch_dtype=dtype)
+    pipe = pipe_cls.from_pretrained(cfg["repo"], torch_dtype=dtype,
+                                    **load_quantized_components(cfg, dtype))
 
     if cfg["offload"]:
         pipe.enable_model_cpu_offload()  # 用到哪個元件才搬上 GPU
@@ -266,3 +345,24 @@ def generate(req: GenerateRequest):
                 "X-Elapsed": f"{time.time() - _progress['started']:.2f}",
             },
         )
+
+
+# ---------------------------------------------------------------------------
+# 創作紀錄：前端把整份 sessions 送來，寫進 data/chat_sessions.json
+# ---------------------------------------------------------------------------
+@app.get("/sessions")
+def get_sessions():
+    with _sessions_lock:
+        if not CHAT_SESSIONS_PATH.exists():
+            return []
+        return json.loads(CHAT_SESSIONS_PATH.read_text(encoding="utf-8") or "[]")
+
+
+@app.put("/sessions")
+def save_sessions(sessions: list[dict]):
+    with _sessions_lock:
+        CHAT_SESSIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CHAT_SESSIONS_PATH.write_text(
+            json.dumps(sessions, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    return {"ok": True, "count": len(sessions)}
