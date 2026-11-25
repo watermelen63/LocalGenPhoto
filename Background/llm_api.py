@@ -137,11 +137,13 @@ class LLMError(RuntimeError):
     pass
 
 
-def _ask_ollama(system_prompt: str, messages: list[dict]) -> dict:
+def _ask_ollama(system_prompt: str, messages: list[dict],
+                options: dict | None = None) -> dict:
     """送給本地 Ollama，回傳解析後的 JSON 物件。"""
     body = json.dumps({
         "model": MODEL_NAME,
         "messages": [{"role": "system", "content": system_prompt}, *messages],
+        "options": options or {},
         "stream": False,
         "format": "json",
         "think": False,
@@ -176,7 +178,9 @@ def call_llm(messages: list[dict]) -> dict:
 def translate_to_english(prompt: str, style: str) -> dict:
     """把使用者填的圖片提示詞與風格翻成英文，回傳 {"prompt": ..., "style": ...}。"""
     user = json.dumps({"prompt": prompt, "style": style}, ensure_ascii=False)
-    result = _ask_ollama(TRANSLATE_PROMPT, [{"role": "user", "content": user}])
+    # 溫度設 0：同樣的輸入盡量得到同樣的翻譯
+    result = _ask_ollama(TRANSLATE_PROMPT, [{"role": "user", "content": user}],
+                         options={"temperature": 0})
     en_prompt = str(result.get("prompt") or "").strip()
     if not en_prompt:
         raise LLMError("LLM 沒有回傳翻譯後的提示詞。")
