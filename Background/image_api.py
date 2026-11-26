@@ -23,9 +23,8 @@ API：
     之後 server.py 若加上 img2img，只需要改 run_engine() 這一個函式。
 """
 
+from contextlib import asynccontextmanager
 import json
-import os
-import tempfile
 import threading
 import time
 import urllib.error
@@ -38,6 +37,23 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse
+
+try:
+    from database import (
+        DatabaseUnavailableError,
+        find_photo_record,
+        init_db,
+        insert_photo_record,
+        load_photo_records,
+    )
+except ImportError:
+    from Background.database import (
+        DatabaseUnavailableError,
+        find_photo_record,
+        init_db,
+        insert_photo_record,
+        load_photo_records,
+    )
 
 from llm_api import (
     ChatRequest,
@@ -67,9 +83,15 @@ RATIO_TOLERANCE = 0.02       # resolution 與 aspect_ratio 允許的誤差（2%�
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 PHOTO_DIR = DATA_DIR / "photo"
-PHOTO_JSON = DATA_DIR / "photo.json"
 
-app = FastAPI(title="Local ImageGen API (contract v1.0.0)")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_db(raise_on_error=False)
+    yield
+
+
+app = FastAPI(title="Local ImageGen API (contract v1.0.0)", lifespan=lifespan)
 
 
 @app.exception_handler(RequestValidationError)
@@ -79,35 +101,23 @@ async def on_validation_error(_: Request, exc: RequestValidationError):
     return error_response(400, "INVALID_REQUEST", f"{loc}: {first.get('msg', '格式錯誤')}")
 
 
+@app.exception_handler(DatabaseUnavailableError)
+async def on_db_error(_: Request, exc: DatabaseUnavailableError):
+    return error_response(503, "DATABASE_UNAVAILABLE", str(exc), retryable=True)
+
+
 # ---------------------------------------------------------------------------
-# Image Storage：data/photo/*.png + data/photo.json
+# Image Storage：data/photo/*.png + PostgreSQL（photo_records 表）
 # ---------------------------------------------------------------------------
 _store_lock = threading.Lock()
 
 
 def load_records() -> list[dict]:
-    try:
-        text = PHOTO_JSON.read_text(encoding="utf-8").strip()
-    except FileNotFoundError:
-        return []
-    if not text:
-        return []
-    data = json.loads(text)
-    return data if isinstance(data, list) else []
-
-
-def save_records(records: list[dict]) -> None:
-    """先寫暫存檔再取代，避免寫到一半當掉把 photo.json 弄壞。"""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=DATA_DIR, suffix=".tmp")
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(records, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, PHOTO_JSON)
+    return load_photo_records()
 
 
 def find_record(image_id: str) -> dict | None:
-    with _store_lock:
-        return next((r for r in load_records() if r["image_id"] == image_id), None)
+    return find_photo_record(image_id)
 
 
 def store_image(png: bytes, *, prompt: str, width: int, height: int, seed: int,
@@ -131,10 +141,7 @@ def store_image(png: bytes, *, prompt: str, width: int, height: int, seed: int,
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     with _store_lock:
-        records = load_records()
-        records.append(record)
-        save_records(records)
-    return record
+        return insert_photo_record(record)
 
 
 def to_image_item(record: dict) -> dict:

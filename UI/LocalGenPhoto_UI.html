@@ -1141,34 +1141,37 @@
      * 圖片生成模型尚未串接；送出表單時只會整理設定並顯示狀態。
      */
 
-    // 舊版資料沿用原 localStorage key，以便保留先前的單次生成紀錄。
+    // 正規化單次圖片生成紀錄格式
+    function normalizeSingleSessions(rawList) {
+        if (!Array.isArray(rawList)) {
+            return [];
+        }
+
+        return rawList
+            .filter(session => session && (!session.mode || session.mode === 'single'))
+            .map(session => ({
+                id: String(session.id || Date.now()),
+                mode: 'single',
+                title: typeof session.title === 'string' && session.title.trim()
+                    ? session.title
+                    : '單次生成圖片',
+                titleEdited: Boolean(session.titleEdited),
+                prompt: session.prompt || '',
+                style: session.style || '',
+                proportion: session.proportion || '',
+                resolution: session.resolution || '',
+                num: session.num || '',
+                example: session.example || ''
+            }));
+    }
+
+    // 舊版資料沿用原 localStorage key，作為離線備援。
     function loadSingleSessions() {
         try {
             const stored = JSON.parse(
                 localStorage.getItem('gemini_chat_sessions') || '[]'
             );
-
-            if (!Array.isArray(stored)) {
-                return [];
-            }
-
-            // 只保留單次圖片生成紀錄，非單次生成紀錄不再載入。
-            return stored
-                .filter(session => session && session.mode === 'single')
-                .map(session => ({
-                    id: String(session.id || Date.now()),
-                    mode: 'single',
-                    title: typeof session.title === 'string' && session.title.trim()
-                        ? session.title
-                        : '單次生成圖片',
-                    titleEdited: Boolean(session.titleEdited),
-                    prompt: session.prompt || '',
-                    style: session.style || '',
-                    proportion: session.proportion || '',
-                    resolution: session.resolution || '',
-                    num: session.num || '',
-                    example: session.example || ''
-                }));
+            return normalizeSingleSessions(stored);
         } catch (error) {
             console.warn('讀取圖片生成紀錄失敗，將建立新紀錄：', error);
             return [];
@@ -1214,14 +1217,51 @@
             JSON.stringify(state.sessions)
         );
 
-        // 同步寫入 data/chat_sessions.json（後端沒開時只在主控台警告）
+        // 同步寫入後端 PostgreSQL 資料庫（後端沒開時只在主控台警告）
         fetch(`${API_BASE}/sessions`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(state.sessions)
         }).catch(error => {
-            console.warn('無法寫入 chat_sessions.json（後端未啟動？）：', error);
+            console.warn('無法同步寫入 PostgreSQL 後端（後端未啟動？）：', error);
         });
+    }
+
+    // 將指定紀錄的設定回填至左側表單
+    function applySessionToForm(session) {
+        if (!session) return;
+        singlePrompt.value = session.prompt || '';
+
+        const styleSelect = document.getElementById('image-style');
+        if (styleSelect && session.style) {
+            const matched = Array.from(styleSelect.options).find(
+                opt => opt.value === session.style || opt.textContent === session.style
+            );
+            if (matched) styleSelect.value = matched.value;
+        }
+
+        if (session.proportion) {
+            const ratioInput = singleCreateForm.querySelector(
+                `input[name="aspect-ratio"][value="${session.proportion}"]`
+            );
+            if (ratioInput) ratioInput.checked = true;
+        }
+
+        const resSelect = document.getElementById('image-resolution');
+        if (resSelect && session.resolution) {
+            const matchedRes = Array.from(resSelect.options).find(
+                opt => opt.value === String(session.resolution).trim()
+            );
+            if (matchedRes) resSelect.value = matchedRes.value;
+        }
+
+        const countSelect = document.getElementById('image-count');
+        if (countSelect && session.num) {
+            const matchedCount = Array.from(countSelect.options).find(
+                opt => opt.value === String(session.num).trim()
+            );
+            if (matchedCount) countSelect.value = matchedCount.value;
+        }
     }
 
     // 顯示單次圖片生成工作區
@@ -1324,7 +1364,7 @@
                 }
 
                 state.currentSessionId = session.id;
-                saveState();
+                applySessionToForm(session);
                 renderSidebar();
                 showSingleCreateView();
             });
@@ -1419,7 +1459,8 @@
             return;
         }
 
-        const negativePrompt = document.getElementById('negative-prompt').value.trim();
+        const negativePromptInput = document.getElementById('negative-prompt');
+        const negativePrompt = negativePromptInput ? negativePromptInput.value.trim() : '';
         const selectedRatio = singleCreateForm.querySelector(
             'input[name="aspect-ratio"]:checked'
         );
@@ -1442,7 +1483,7 @@
         singleCreateStatus.textContent +=
             ' ';
 
-        // 寫入目前創作紀錄，並同步到 data/chat_sessions.json
+        // 寫入目前創作紀錄，並同步到後端 PostgreSQL 資料庫
         const currentSession = state.sessions.find(
             session => session.id === state.currentSessionId
         );
@@ -1468,16 +1509,31 @@
         console.log('參考圖片：', referenceImageInput.files[0] || null);
     });
 
-    // 啟動：只載入單次圖片生成紀錄。
-    function init() {
-        state.sessions = state.sessions.filter(
-            session => session.mode === 'single'
-        );
+    // 啟動：優先從後端 PostgreSQL 載入創作紀錄，失敗時退回 localStorage。
+    async function init() {
+        try {
+            const res = await fetch(`${API_BASE}/sessions`);
+            if (res.ok) {
+                const remoteSessions = normalizeSingleSessions(await res.json());
+                if (remoteSessions.length > 0) {
+                    state.sessions = remoteSessions;
+                    localStorage.setItem(
+                        'gemini_chat_sessions',
+                        JSON.stringify(state.sessions)
+                    );
+                }
+            }
+        } catch (error) {
+            console.warn('無法從 PostgreSQL 後端讀取紀錄，改用本機快取：', error);
+        }
+
+        state.sessions = normalizeSingleSessions(state.sessions);
 
         if (state.sessions.length === 0) {
             createNewSession();
         } else {
             state.currentSessionId = state.sessions[0].id;
+            applySessionToForm(state.sessions[0]);
             saveState();
             renderSidebar();
         }

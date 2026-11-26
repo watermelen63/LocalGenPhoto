@@ -11,13 +11,13 @@ API：
     POST /unload      卸載目前模型，釋放顯存
 """
 
+from contextlib import asynccontextmanager
 import gc
 import io
 import json
 import threading
 import time
 import urllib.request
-from pathlib import Path
 
 import torch
 import diffusers
@@ -25,6 +25,25 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
+
+try:
+    from database import (
+        DatabaseUnavailableError,
+        get_all_sessions,
+        get_generation_history,
+        init_db,
+        log_generation,
+        replace_all_sessions,
+    )
+except ImportError:
+    from Background.database import (
+        DatabaseUnavailableError,
+        get_all_sessions,
+        get_generation_history,
+        init_db,
+        log_generation,
+        replace_all_sessions,
+    )
 
 # ---------------------------------------------------------------------------
 # 模型設定表：要加新模型，只要在這裡加一筆
@@ -105,7 +124,13 @@ DEFAULT_MODEL = "z-image-turbo"
 OLLAMA_URL = "http://127.0.0.1:11434"
 UNLOAD_OLLAMA_BEFORE_GENERATE = True  # 生圖前先請 Ollama 釋放顯存
 
-app = FastAPI(title="Local ImageGen Backend")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_db(raise_on_error=False)
+    yield
+
+
+app = FastAPI(title="Local ImageGen Backend", lifespan=lifespan)
 
 # 前端 HTML 若是直接用檔案開啟（file://）也要能呼叫 API
 app.add_middleware(
@@ -114,10 +139,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# 前端送出的創作紀錄（prompt/style/proportion/resolution/num/example）存放位置
-CHAT_SESSIONS_PATH = Path(__file__).resolve().parent.parent / "data" / "chat_sessions.json"
-_sessions_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # 全域狀態
@@ -334,6 +355,22 @@ def generate(req: GenerateRequest):
         finally:
             _progress.update(busy=False)
 
+        elapsed = time.time() - _progress["started"]
+        try:
+            log_generation(
+                prompt=req.prompt,
+                negative_prompt=req.negative_prompt,
+                model_id=req.model,
+                width=req.width,
+                height=req.height,
+                steps=steps,
+                guidance=guidance,
+                seed=seed,
+                elapsed_sec=elapsed,
+            )
+        except DatabaseUnavailableError as exc:
+            print(f"[db] 略過寫入生圖歷史：{exc}")
+
         buf = io.BytesIO()
         image.save(buf, format="PNG")
         return Response(
@@ -342,27 +379,39 @@ def generate(req: GenerateRequest):
             headers={
                 "X-Seed": str(seed),
                 "X-Model": req.model,
-                "X-Elapsed": f"{time.time() - _progress['started']:.2f}",
+                "X-Elapsed": f"{elapsed:.2f}",
             },
         )
 
 
 # ---------------------------------------------------------------------------
-# 創作紀錄：前端把整份 sessions 送來，寫進 data/chat_sessions.json
+# 生圖歷史紀錄（PostgreSQL generation_records 表）
+# ---------------------------------------------------------------------------
+@app.get("/history")
+def list_history(limit: int = 20, offset: int = 0):
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    try:
+        return get_generation_history(limit=limit, offset=offset)
+    except DatabaseUnavailableError as exc:
+        raise HTTPException(503, str(exc))
+
+
+# ---------------------------------------------------------------------------
+# 創作紀錄：前端把整份 sessions 送來，寫進 PostgreSQL（chat_sessions 表）
 # ---------------------------------------------------------------------------
 @app.get("/sessions")
 def get_sessions():
-    with _sessions_lock:
-        if not CHAT_SESSIONS_PATH.exists():
-            return []
-        return json.loads(CHAT_SESSIONS_PATH.read_text(encoding="utf-8") or "[]")
+    try:
+        return get_all_sessions()
+    except DatabaseUnavailableError as exc:
+        raise HTTPException(503, str(exc))
 
 
 @app.put("/sessions")
 def save_sessions(sessions: list[dict]):
-    with _sessions_lock:
-        CHAT_SESSIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        CHAT_SESSIONS_PATH.write_text(
-            json.dumps(sessions, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-    return {"ok": True, "count": len(sessions)}
+    try:
+        count = replace_all_sessions(sessions)
+    except DatabaseUnavailableError as exc:
+        raise HTTPException(503, str(exc))
+    return {"ok": True, "count": count}
