@@ -1,1452 +1,1979 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
-  <meta charset="UTF-8">
-  <!-- 響應式網頁設計設定：確保在手機與平板電腦上呈現正確的比例 -->
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>單次圖片生成</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>單次圖片生成</title>
 
-  <!-- ==================== 外部第三方套件引入 ==================== -->
-  <!-- 1. FontAwesome 圖示庫：提供選單與操作圖示 -->
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-<style>
-    /* ==================== 全域變數定義 (CSS Variables) ==================== */
-    :root {
-  --bg-dark: #faf6f0;        /* 主背景：清爽暖米白 */
-  --bg-sidebar: #dbcab5;     /* 側邊欄背景：加深燕麥色 (與主背景拉開明顯對比) */
-  --bg-card: #ffffff;        /* 卡片與輸入框背景：純白 (突顯層次) */
-      --primary: #5c341a;        /* 主要亮點/按鈕：濃郁黑咖啡/深核桃棕 */
-  --text-main: #1f140c;      /* 主要文字：極深咖黑 (對比度極高、閱讀最清晰) */
-  --text-muted: #5e4d40;     /* 次要文字：中深褐色 */
-  --border: #b59f88;         /* 邊框顏色：清晰的暖灰褐色線條 */
-}
-    
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
-    /* 基本重設 (CSS Reset) */
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    }
+    <style>
+        :root {
+            --bg-dark: #faf6f0;
+            --bg-sidebar: #dbcab5;
+            --bg-card: #ffffff;
+            --primary: #5c341a;
+            --text-main: #1f140c;
+            --text-muted: #5e4d40;
+            --border: #b59f88;
+        }
 
-    body {
-      background-color: var(--bg-dark);
-      color: var(--text-main);
-      display: flex;
-      height: 100vh;
-      overflow: hidden; /* 防止整個頁面出現外層捲軸 */
-    }
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+                Roboto, Helvetica, Arial, sans-serif;
+        }
 
-    /* ==================== 1. 側邊欄 (Sidebar) 樣式 ==================== */
-    #sidebar {
-      width: 260px;
-      background-color: var(--bg-sidebar);
-      border-right: 1px solid var(--border);
-      display: flex;
-      flex-direction: column;
-      transition: margin-left 0.3s ease, transform 0.3s ease; 
-      z-index: 100;
-    }
-    #sidebar.collapsed {
-    margin-left: -260px;
-    }
-    .sidebar-header {
-      padding: 16px;
-    }
+        body {
+            display: flex;
+            width: 100%;
+            height: 100vh;
+            overflow: hidden;
+            background: var(--bg-dark);
+            color: var(--text-main);
+        }
 
-    /* 「新增創作」按鈕 */
-    .btn-new-create {
-      width: 100%;
-      padding: 12px;
-      background-color: var(--bg-card);
-      border: 1px solid var(--border);
-      color: var(--text-main);
-      border-radius: 8px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-weight: 500;
-      transition: background 0.2s;
-    }
+        button {
+            font: inherit;
+        }
 
-    .btn-new-create:hover {
-      background-color: #3b3b52;
-    }
-    /* =========================
-   新增創作模式選單
-========================= */
+        /* =========================
+           側邊欄
+        ========================= */
 
-/* 選單預設隱藏 */
-.creation-menu {
-    display: none;
-    flex-direction: column;
-    gap: 8px;
-    margin-top: 10px;
-}
+        #sidebar {
+            flex: 0 0 260px;
+            width: 260px;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-sidebar);
+            border-right: 1px solid var(--border);
+            transition: margin-left 0.3s ease, transform 0.3s ease;
+            z-index: 100;
+        }
 
-/* 選單開啟 */
-.creation-menu.show {
-    display: flex;
-}
+        #sidebar.collapsed {
+            margin-left: -260px;
+        }
 
-/* 每個創作選項 */
-.creation-option {
+        .gallery-button {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-main);
+            cursor: pointer;
+            text-align: left;
+            transition: background 0.2s;
+        }
+
+        .gallery-button:hover {
+            background: #eee2d4;
+        }
+
+        .creation-history {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 10px 16px;
+        }
+
+        .history-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 10px 12px;
+            margin-bottom: 4px;
+            border-radius: 6px;
+            color: var(--text-muted);
+            cursor: pointer;
+        }
+
+        .history-item:hover,
+        .history-item.active {
+            background: var(--bg-card);
+            color: var(--text-main);
+        }
+
+       .history-title {
     display: flex;
     align-items: center;
-    gap: 12px;
-
-    width: 100%;
-    padding: 12px;
-
-    background-color: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-
-    color: var(--text-main);
-    cursor: pointer;
-    text-align: left;
-
-    transition: background 0.2s;
-}
-
-/* 滑鼠懸停 */
-.creation-option:hover {
-    background-color: #eee2d4;
-}
-
-/* 選項圖示 */
-.creation-option > i {
-    font-size: 20px;
-    color: var(--primary);
-}
-
-/* 選項文字 */
-.creation-option span {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
-/* 標題 */
-.creation-option strong {
-    font-size: 14px;
-}
-
-/* 說明 */
-.creation-option small {
-    font-size: 12px;
-    color: var(--text-muted);
-}
-    /* 圖片生成歷史紀錄清單 */
-    .creation-history {
-      flex: 1; /* 佔滿剩餘高度 */
-      overflow-y: auto; /* 訊息過多時可垂直滾動 */
-      padding: 10px 16px;
-    }
-
-    .history-item {
-      padding: 10px 12px;
-      border-radius: 6px;
-      cursor: pointer;
-      color: var(--text-muted);
-      margin-bottom: 4px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis; /* 文字過長顯示省略號 */
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .history-item:hover, .history-item.active {
-      background-color: var(--bg-card);
-      color: var(--text-main);
-    }
-    /* 歷史紀錄標題 */
-.history-title {
+    flex: 1;
     min-width: 0;
+    gap: 8px;
+
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    font-size: 13px;
 }
 
-/* 歷史紀錄操作按鈕 */
-.history-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
+/* 正在重新命名時，取消省略號 */
+.history-title.editing {
+    overflow: visible;
+    text-overflow: clip;
 }
 
-/* 編輯與刪除按鈕預設隱藏 */
-.history-actions button {
-    display: none;
-    background: transparent;
-    border: none;
-    color: var(--text-muted);
-    cursor: pointer;
-    padding: 4px;
-}
+        .history-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
 
-/* 滑鼠移到創作紀錄時顯示 */
-.history-item:hover .history-actions button,
-.history-item:focus-within .history-actions button {
-    display: inline-flex;
-}
+        .history-actions button {
+            display: none;
+            padding: 4px;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+        }
 
-.history-actions button:hover {
-    color: var(--primary);
-}
+        .history-item:hover .history-actions button,
+        .history-item:focus-within .history-actions button {
+            display: inline-flex;
+        }
 
-    /* 刪除按鈕預設隱藏，滑鼠懸停時顯示 */
-    .history-item i.delete-btn {
-      display: none;
-      opacity: 0.7;
-    }
+        .history-actions button:hover {
+            color: var(--primary);
+        }
 
-    .history-item:hover i.delete-btn {
-      display: inline-block;
-    }
+        .sidebar-bottom {
+            padding: 12px 16px;
+            border-top: 1px solid var(--border);
+        }
 
-    .sidebar-footer {
-      padding: 16px;
-      border-top: 1px solid var(--border);
-    }
+        .gallery-button {
+            justify-content: flex-start;
+        }
 
-    .btn-settings {
-      width: 100%;
-      padding: 10px;
-      background: transparent;
-      border: 1px solid var(--border);
-      color: var(--text-main);
-      border-radius: 6px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      justify-content: center;
-    }
+        .gallery-button i {
+            color: var(--primary);
+        }
 
-    /* 圖片生成工作區標題列使用的側邊欄切換按鈕 */
-    .menu-toggle {
-      background: none;
-      border: none;
-      color: var(--text-main);
-      font-size: 1.2rem;
-      cursor: pointer;
-      display: block;
-    }
+        .menu-toggle {
+            background: transparent;
+            border: none;
+            color: var(--text-main);
+            font-size: 1.2rem;
+            cursor: pointer;
+        }
 
-    /* ==================== 4. API 設定彈窗 (Modal) 樣式 ==================== */
-    .modal {
-      display: none; /* 預設隱藏 */
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: rgba(0, 0, 0, 0.6);
-      align-items: center;
-      justify-content: center;
-      z-index: 1000;
-    }
+        /* =========================
+           主要頁面共用
+        ========================= */
 
-    .modal-content {
-      background-color: var(--bg-card);
-      border: 1px solid var(--border);
-      padding: 24px;
-      border-radius: 12px;
-      width: 90%;
-      max-width: 480px;
-    }
+        #single-create-view,
+        #gallery-view {
+            display: none;
+            flex: 1;
+            min-width: 0;
+            height: 100vh;
+            overflow: hidden;
+        }
 
-    .modal-content h3 {
-      margin-bottom: 16px;
-    }
+        #single-create-view.active {
+            display: flex;
+            flex-direction: column;
+        }
 
-    .form-group {
-      margin-bottom: 16px;
-    }
+        #gallery-view.active {
+            display: flex;
+            flex-direction: column;
+        }
 
-    .form-group label {
-      display: block;
-      margin-bottom: 6px;
-      font-size: 0.9rem;
-      color: var(--text-muted);
-    }
+        /* =========================
+           單次生成頁面
+        ========================= */
 
-    .form-group input, .form-group textarea {
-      width: 100%;
-      padding: 10px;
-      background-color: var(--bg-sidebar);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--text-main);
-    }
+        .creation-header {
+            min-height: 68px;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 10px 24px;
+            border-bottom: 1px solid var(--border);
+        }
 
-    .modal-actions {
-      display: flex;
-      justify-content: flex-end;
-      gap: 10px;
-    }
+        .creation-header-title {
+            flex: 1;
+            min-width: 0;
+        }
 
-    .btn-secondary, .btn-primary {
-      padding: 8px 16px;
-      border-radius: 6px;
-      cursor: pointer;
-      border: none;
-    }
+        .creation-eyebrow,
+        .panel-eyebrow {
+            display: block;
+            color: var(--text-muted);
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.12em;
+        }
 
-    .btn-secondary {
-      background-color: var(--border);
-      color: var(--text-main);
-    }
+        .creation-header-title h1 {
+            margin-top: 3px;
+            font-size: 19px;
+        }
 
-    .btn-primary {
-      background-color: var(--primary);
-      color: #11111b;
-      font-weight: bold;
-    }
+        .single-workspace {
+            display: grid;
+            grid-template-columns: minmax(300px, 370px) minmax(0, 1fr);
+            gap: 20px;
+            flex: 1;
+            min-height: 0;
+            padding: 20px;
+            overflow-y: auto;
+        }
 
-   /* ==================== 5. 響應式斷點 (Responsive Design) ==================== */
+        .creation-settings-panel,
+        .preview-panel {
+            min-width: 0;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+        }
 
-/* 電腦版：側邊欄收合 */
-#sidebar.collapsed {
-    margin-left: -260px;
-}
+        .creation-settings-panel {
+            padding: 22px;
+            overflow-y: auto;
+        }
 
-/* 手機版 */
-@media (max-width: 768px) {
+        .panel-intro {
+            margin-bottom: 24px;
+        }
 
-    #sidebar {
-        position: fixed;
-        top: 0;
-        left: 0;
-        height: 100vh;
-        transform: translateX(-100%);
-        margin-left: 0;
-    }
+        .panel-intro h2,
+        .preview-heading h2 {
+            margin-top: 6px;
+            font-size: 20px;
+        }
 
-    /* 手機版展開 */
-    #sidebar.active {
-        transform: translateX(0);
-    }
+        .panel-intro p {
+            margin-top: 7px;
+            color: var(--text-muted);
+            font-size: 13px;
+            line-height: 1.6;
+        }
 
-    /* 避免電腦版的 collapsed 狀態影響手機版 */
-    #sidebar.collapsed {
-        margin-left: 0;
-    }
-}
-/* ==============================
-   單次圖片生成工作區
-================================ */
+        .field-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 20px;
+        }
 
-/* 新工作區預設隱藏 */
-#single-create-view {
-    display: none;
-    flex: 1;
-    flex-direction: column;
-    min-width: 0;
-    height: 100vh;
-    overflow: hidden;
-    background-color: var(--bg-dark);
-}
+        .field-group > label {
+            font-size: 14px;
+            font-weight: 600;
+        }
 
-/* 顯示新工作區 */
-#single-create-view.active {
-    display: flex;
-}
+        #single-create-view textarea {
+            width: 100%;
+            min-height: 45px;
+            padding: 12px;
+            background: var(--bg-dark);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-main);
+            font-size: 14px;
+            line-height: 1.6;
+            resize: vertical;
+            outline: none;
+        }
 
+        #single-create-view textarea:focus,
+        #single-create-view select:focus {
+            border-color: var(--primary);
+        }
 
-/* ==============================
-   頂部標題列
-================================ */
+        #single-create-view textarea::placeholder {
+            color: #9a8b7e;
+        }
 
-.creation-header {
-    min-height: 68px;
+        .field-hint {
+            color: var(--text-muted);
+            font-size: 11px;
+            line-height: 1.5;
+        }
+
+        .control-select {
+            width: 100%;
+            padding: 11px 12px;
+            background: var(--bg-dark);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-main);
+            font-size: 14px;
+            outline: none;
+        }
+
+        .ratio-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+        }
+
+        .ratio-option {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            padding: 10px 4px;
+            background: var(--bg-dark);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-muted);
+            font-size: 13px;
+            cursor: pointer;
+        }
+
+        .ratio-option input {
+            accent-color: var(--primary);
+        }
+
+        .ratio-option:has(input:checked) {
+            background: #eee2d4;
+            border-color: var(--primary);
+            color: var(--primary);
+            font-weight: 700;
+        }
+
+        .field-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .visually-hidden {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+        }
+
+        .upload-dropzone {
+            min-height: 120px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            padding: 16px;
+            background: var(--bg-dark);
+            border: 1px dashed var(--border);
+            border-radius: 10px;
+            color: var(--text-muted);
+            cursor: pointer;
+        }
+
+        .upload-dropzone:hover {
+            background: #eee2d4;
+        }
+
+        .upload-dropzone i {
+            color: var(--primary);
+            font-size: 24px;
+        }
+
+        .upload-dropzone span {
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .upload-dropzone small {
+            font-size: 11px;
+        }
+
+        .reference-preview {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-top: 10px;
+            padding: 10px;
+            background: var(--bg-dark);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+
+        .reference-preview[hidden] {
+            display: none;
+        }
+
+        .reference-preview img {
+            width: 58px;
+            height: 58px;
+            object-fit: cover;
+            border-radius: 6px;
+        }
+
+        .reference-file-info {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .reference-file-info span {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 12px;
+        }
+
+        .reference-file-info button {
+            align-self: flex-start;
+            padding: 3px 8px;
+            background: transparent;
+            border: none;
+            color: #a33;
+            cursor: pointer;
+        }
+
+        .btn-generate {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            padding: 14px;
+            background: var(--primary);
+            border: none;
+            border-radius: 9px;
+            color: white;
+            font-size: 15px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .btn-generate:hover {
+            opacity: 0.88;
+        }
+
+        .creation-status {
+            margin-top: 12px;
+            color: var(--text-muted);
+            font-size: 12px;
+            line-height: 1.6;
+            text-align: center;
+        }
+
+        .preview-panel {
+            display: flex;
+            flex-direction: column;
+            padding: 22px;
+        }
+
+        .preview-heading {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 18px;
+        }
+
+        .preview-state {
+            padding: 6px 10px;
+            background: var(--bg-dark);
+            border-radius: 20px;
+            color: var(--text-muted);
+            font-size: 11px;
+        }
+
+        .preview-canvas {
+            flex: 1;
+            min-height: 420px;
+            display: grid;
+            place-items: center;
+            padding: 24px;
+            background: linear-gradient(145deg, #ffffff, #faf6f0);
+            border: 1px dashed var(--border);
+            border-radius: 12px;
+        }
+
+        .preview-empty-state {
+            max-width: 350px;
+            text-align: center;
+        }
+
+        .preview-icon {
+            width: 76px;
+            height: 76px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 18px;
+            background: #eee2d4;
+            border-radius: 20px;
+            color: var(--primary);
+            font-size: 30px;
+        }
+
+        .preview-empty-state h3 {
+            margin-bottom: 9px;
+            font-size: 17px;
+        }
+
+        .preview-empty-state p {
+            color: var(--text-muted);
+            font-size: 13px;
+            line-height: 1.7;
+        }
+
+        .preview-footer {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 16px;
+            color: var(--text-muted);
+            font-size: 12px;
+        }
+
+        /* =========================
+           圖庫頁面
+        ========================= */
+
+        .gallery-page {
+            padding: 30px;
+            overflow-y: auto !important;
+            gap: 24px;
+        }
+
+        .gallery-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .gallery-title-area {
     display: flex;
     align-items: center;
     gap: 14px;
-    padding: 10px 24px;
-    border-bottom: 1px solid var(--border);
-}
-
-.creation-header-title {
-    flex: 1;
     min-width: 0;
 }
 
-.creation-eyebrow,
-.panel-eyebrow {
-    display: block;
-    color: var(--text-muted);
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.12em;
+.gallery-title-area h1 {
+    margin-top: 5px;
 }
+        .gallery-header h1 {
+            margin-top: 5px;
+            font-size: 24px;
+        }
 
-.creation-header-title h1 {
-    font-size: 19px;
-    margin-top: 3px;
-}
+        .gallery-search-wrapper {
+            position: relative;
+            width: min(100%, 340px);
+        }
 
-/* ==============================
-   左右主要工作區
-================================ */
+        .gallery-search-wrapper i {
+            position: absolute;
+            top: 50%;
+            left: 13px;
+            transform: translateY(-50%);
+            color: var(--text-muted);
+        }
 
-.single-workspace {
-    display: grid;
-    grid-template-columns: minmax(300px, 370px) minmax(0, 1fr);
-    gap: 20px;
+        .gallery-search-wrapper input {
+            width: 100%;
+            padding: 11px 14px 11px 38px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-main);
+            outline: none;
+        }
 
+        .gallery-search-wrapper input:focus {
+            border-color: var(--primary);
+        }
+
+        .gallery-description {
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        .gallery-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 18px;
+            align-content: start;
+        }
+
+        .gallery-card {
+            min-width: 0;
+            overflow: hidden;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .gallery-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 5px 16px rgba(0, 0, 0, 0.08);
+        }
+
+        .gallery-card img {
+            display: block;
+            width: 100%;
+            aspect-ratio: 1 / 1;
+            object-fit: cover;
+            background: #eee2d4;
+        }
+
+        .gallery-info {
+            padding: 12px;
+        }
+
+        .gallery-info strong {
+            display: block;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 13px;
+        }
+
+        .gallery-info p {
+            margin-top: 6px;
+            color: var(--text-muted);
+            font-size: 11px;
+            line-height: 1.5;
+            overflow: hidden;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            line-clamp: 2;
+            -webkit-box-orient: vertical;
+        }
+
+        .gallery-date {
+            display: block;
+            margin-top: 8px;
+            color: var(--text-muted);
+            font-size: 11px;
+        }
+
+        .gallery-empty {
+            grid-column: 1 / -1;
+            padding: 70px 20px;
+            color: var(--text-muted);
+            text-align: center;
+            line-height: 1.8;
+        }
+
+        .gallery-empty i {
+            display: block;
+            margin-bottom: 15px;
+            color: var(--border);
+            font-size: 42px;
+        }
+.history-title-input {
     flex: 1;
-    min-height: 0;
-    padding: 20px;
-
-    overflow-y: auto;
-}
-
-
-/* 左側設定面板、右側預覽面板 */
-
-.creation-settings-panel,
-.preview-panel {
     min-width: 0;
-    background-color: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-}
-
-
-/* ==============================
-   左側生成設定
-================================ */
-
-.creation-settings-panel {
-    padding: 22px;
-    overflow-y: auto;
-}
-
-.panel-intro {
-    margin-bottom: 24px;
-}
-
-.panel-intro h2,
-.preview-heading h2 {
-    font-size: 20px;
-    margin-top: 6px;
-}
-
-.panel-intro p {
-    color: var(--text-muted);
-    font-size: 13px;
-    margin-top: 7px;
-    line-height: 1.6;
-}
-
-
-.field-group {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin-bottom: 20px;
-}
-
-.field-group > label {
-    color: var(--text-main);
-    font-size: 14px;
-    font-weight: 600;
-}
-
-
-/* 覆蓋原本全域 textarea 設定 */
-
-#single-create-view textarea {
     width: 100%;
-    height: auto;
-    flex: initial;
-    max-height: none;
-    min-height: 45px;
+    box-sizing: border-box;
 
-    padding: 12px;
+    padding: 4px 6px;
 
-    background-color: var(--bg-dark);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-
-    color: var(--text-main);
-    font-size: 14px;
-    line-height: 1.6;
-
-    resize: vertical;
-    outline: none;
-}
-
-#single-create-view textarea:focus,
-#single-create-view select:focus {
-    border-color: var(--primary);
-}
-
-#single-create-view textarea::placeholder {
-    color: #9a8b7e;
-}
-
-.field-hint {
-    color: var(--text-muted);
-    font-size: 11px;
-    line-height: 1.5;
-}
-
-
-/* 下拉選單 */
-
-.control-select {
-    width: 100%;
-    padding: 11px 12px;
-
-    background-color: var(--bg-dark);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-
-    color: var(--text-main);
-    font-size: 14px;
-    outline: none;
-}
-
-
-/* 分隔線 */
-
-.setting-divider {
-    height: 1px;
-    background-color: var(--border);
-    margin: 22px 0;
-}
-
-
-/* ==============================
-   圖片比例選擇
-================================ */
-
-.ratio-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 8px;
-}
-
-.ratio-option {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 5px;
-
-    padding: 10px 4px;
-
-    background-color: var(--bg-dark);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-
-    color: var(--text-muted);
-    font-size: 13px;
-    cursor: pointer;
-}
-
-.ratio-option input {
-    accent-color: var(--primary);
-}
-
-.ratio-option:has(input:checked) {
-    background-color: #eee2d4;
-    border-color: var(--primary);
-    color: var(--primary);
-    font-weight: 700;
-}
-
-
-/* 解析度與圖片數量 */
-
-.field-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-}
-
-
-/* ==============================
-   參考圖片上傳
-================================ */
-
-.visually-hidden {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
-}
-
-.upload-dropzone {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 7px;
-
-    min-height: 120px;
-    padding: 16px;
-
-    background-color: var(--bg-dark);
-    border: 1px dashed var(--border);
-    border-radius: 10px;
-
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: background 0.2s;
-}
-
-.upload-dropzone:hover {
-    background-color: #eee2d4;
-}
-
-.upload-dropzone i {
-    color: var(--primary);
-    font-size: 24px;
-}
-
-.upload-dropzone span {
-    font-size: 13px;
-    font-weight: 600;
-}
-
-.upload-dropzone small {
-    font-size: 11px;
-}
-
-
-/* 已上傳的參考圖片 */
-
-.reference-preview {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-top: 10px;
-    padding: 10px;
-
-    background-color: var(--bg-dark);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-}
-
-.reference-preview[hidden] {
-    display: none;
-}
-
-.reference-preview img {
-    width: 58px;
-    height: 58px;
-    object-fit: cover;
+    border: 1px solid #6366f1;
     border-radius: 6px;
+
+    background: #ffffff !important;
+
+    color: #222222 !important;
+    -webkit-text-fill-color: #222222 !important;
+    -webkit-text-security: none !important;
+
+    font-family: Arial, sans-serif !important;
+    font-size: 14px;
+    font-weight: normal;
+
+    letter-spacing: normal;
+    text-overflow: clip;
+    caret-color: #222222;
+
+    opacity: 1;
+    outline: none;
 }
 
-.reference-file-info {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.reference-file-info span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 12px;
-}
-
-.reference-file-info button {
-    align-self: flex-start;
-    padding: 3px 8px;
-    color: #a33;
-    background: transparent;
-    border: none;
-    cursor: pointer;
+.history-title-input:focus {
+    border-color: #6366f1;
 }
 
 
-/* ==============================
-   生成按鈕
-================================ */
+        /* =========================
+           響應式設計
+        ========================= */
 
-.btn-generate {
-    width: 100%;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 10px;
+        @media (max-width: 1050px) {
+            .single-workspace {
+                grid-template-columns: minmax(0, 1fr);
+            }
 
-    padding: 14px;
+            .preview-canvas {
+                min-height: 350px;
+            }
+        }
 
-    background-color: var(--primary);
-    border: none;
-    border-radius: 9px;
+        @media (max-width: 768px) {
+            #sidebar {
+                position: fixed;
+                top: 0;
+                left: 0;
+                height: 100vh;
+                transform: translateX(-100%);
+                margin-left: 0;
+            }
 
-    color: white;
-    font-size: 15px;
-    font-weight: 700;
+            #sidebar.active {
+                transform: translateX(0);
+            }
 
-    cursor: pointer;
-    transition: opacity 0.2s;
-}
+            #sidebar.collapsed {
+                margin-left: 0;
+            }
 
-.btn-generate:hover {
-    opacity: 0.88;
-}
+            .creation-header {
+                padding: 10px 14px;
+            }
 
-.creation-status {
-    margin-top: 12px;
-    color: var(--text-muted);
-    font-size: 12px;
-    line-height: 1.6;
-    text-align: center;
-}
+            .creation-header-title h1 {
+                font-size: 16px;
+            }
 
+            .single-workspace {
+                padding: 12px;
+                gap: 14px;
+            }
 
-/* ==============================
-   右側圖片預覽區
-================================ */
+            .creation-settings-panel,
+            .preview-panel {
+                padding: 16px;
+            }
 
-.preview-panel {
-    display: flex;
-    flex-direction: column;
-    padding: 22px;
-}
+            .preview-canvas {
+                min-height: 280px;
+            }
 
-.preview-heading {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 18px;
-}
+            .gallery-page {
+                padding: 18px;
+            }
 
-.preview-state {
-    padding: 6px 10px;
-    background-color: var(--bg-dark);
-    border-radius: 20px;
-    color: var(--text-muted);
-    font-size: 11px;
-    white-space: nowrap;
-}
+            .gallery-header {
+                align-items: flex-start;
+                flex-direction: column;
+            }
 
+            .gallery-search-wrapper {
+                width: 100%;
+            }
 
-/* 圖片預覽畫布 */
+            .gallery-grid {
+                grid-template-columns: repeat(auto-fill, minmax(145px, 1fr));
+                gap: 12px;
+            }
+        }
+        .preview-result {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            border-radius: 8px;
+        }
 
-.preview-canvas {
-    flex: 1;
-    min-height: 420px;
-
-    display: grid;
-    place-items: center;
-
-    padding: 24px;
-
-    background: linear-gradient(145deg, #ffffff, #faf6f0);
-    border: 1px dashed var(--border);
-    border-radius: 12px;
-}
-
-.preview-empty-state {
-    max-width: 350px;
-    text-align: center;
-}
-
-.preview-icon {
-    width: 76px;
-    height: 76px;
-
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    margin: 0 auto 18px;
-
-    background-color: #eee2d4;
-    border-radius: 20px;
-
-    color: var(--primary);
-    font-size: 30px;
-}
-
-.preview-empty-state h3 {
-    font-size: 17px;
-    margin-bottom: 9px;
-}
-
-.preview-empty-state p {
-    color: var(--text-muted);
-    font-size: 13px;
-    line-height: 1.7;
-}
-
-
-/* 預覽區底部 */
-
-.preview-footer {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-
-    margin-top: 16px;
-
-    color: var(--text-muted);
-    font-size: 12px;
-}
-
-
-/* ==============================
-   響應式設計
-================================ */
-
-@media (max-width: 1050px) {
-
-    .single-workspace {
-        grid-template-columns: minmax(0, 1fr);
-    }
-
-    .preview-canvas {
-        min-height: 350px;
-    }
-}
-
-@media (max-width: 768px) {
-
-    #single-create-view {
-        height: 100vh;
-    }
-
-    .creation-header {
-        padding: 10px 14px;
-    }
-
-    .creation-header-title h1 {
-        font-size: 16px;
-    }
-
-    .single-workspace {
-        padding: 12px;
-        gap: 14px;
-    }
-
-    .creation-settings-panel,
-    .preview-panel {
-        padding: 16px;
-    }
-
-    .preview-canvas {
-        min-height: 280px;
-    }
-}
-  </style>
+    </style>
 </head>
+
 <body>
 
-  <!-- 1. 左側邊欄區塊 -->
-  <div id="sidebar">
-    <div class="sidebar-header">
+    <!-- =========================
+         左側側邊欄
+    ========================= -->
 
-  <!-- 新增創作按鈕 -->
-  <button class="btn-new-create" id="btn-new-create">
-    <i class="fa-solid fa-plus"></i>
-    新增創作
-  </button>
+    <div id="sidebar">
 
-  <!-- 創作模式選單 -->
-  <div class="creation-menu" id="creation-menu">
+        <!-- 歷史紀錄永遠留在側邊欄 -->
 
-    <button class="creation-option" id="btn-single-create">
-      <i class="fa-solid fa-image"></i>
-      <span>
-        <strong>單次生成</strong>
-        <small>獨立生成一張圖片</small>
-      </span>
-    </button>
-</div>
+        <div class="creation-history" id="creation-history"></div>
 
-</div>
-    <!-- 圖片生成歷史紀錄清單，由 JavaScript 動態生成內容 -->
-    <div class="creation-history" id="creation-history"></div>
-    </div>
-  
+        <!-- 圖庫按鈕 -->
 
-<!-- ==============================
-     單次圖片生成工作區
-================================== -->
-<section id="single-create-view">
-
-    <!-- 頂部標題列 -->
-    <header class="creation-header">
-
-        <button class="menu-toggle" id="btn-toggle-sidebar-create"
-                type="button" title="切換側邊欄">
-            <i class="fa-solid fa-bars"></i>
-        </button>
-
-        <div class="creation-header-title">
-            <span class="creation-eyebrow">IMAGE STUDIO</span>
-            <h1>單次圖片生成</h1>
+        <div class="sidebar-bottom">
+            <button id="gallery-button" class="gallery-button">
+                <i class="fas fa-images"></i>
+                <span>圖庫</span>
+            </button>
         </div>
 
-      
-    </header>
+    </div>
+    <!-- sidebar 到此結束 -->
 
+    <!-- =========================
+         單次圖片生成頁面
+    ========================= -->
 
-    <!-- 主要工作區 -->
-    <div class="single-workspace">
+    <section id="single-create-view">
 
-        <!-- 左側：生成設定 -->
-        <aside class="creation-settings-panel">
+        <header class="creation-header">
 
-            <form id="single-create-form">
+            <button class="menu-toggle"
+                    id="btn-toggle-sidebar-create"
+                    type="button"
+                    title="切換側邊欄">
+                <i class="fa-solid fa-bars"></i>
+            </button>
 
-                <div class="panel-intro">
-                    <span class="panel-eyebrow">CONFIGURATION</span>
-                    <h2>生成設定</h2>
-                    <p>調整你想要的圖片內容與輸出條件。</p>
-                </div>
+            <div class="creation-header-title">
+                <span class="creation-eyebrow">IMAGE STUDIO</span>
+                <h1>單次圖片生成</h1>
+            </div>
 
+        </header>
 
-                <!-- 提示詞 -->
-                <div class="field-group">
-                    <label for="single-prompt">圖片提示詞</label>
+        <div class="single-workspace">
 
-                    <textarea
-                        id="single-prompt"
-                        rows="5"
-                        placeholder="例如：一座位於森林深處的玻璃建築，陽光穿過樹葉，電影級光影效果..."
-                    ></textarea>
+            <!-- 左側生成設定 -->
 
-                    <small class="field-hint">
-                        描述主體、場景、光線、構圖與畫面風格。
-                    </small>
-                </div>
+            <aside class="creation-settings-panel">
 
+                <form id="single-create-form">
 
-                
-                <!-- 圖片風格 -->
-                <div class="field-group">
-                    <label for="image-style">圖片風格</label>
-
-                    <select id="image-style" class="control-select">
-                        <option value="auto">不指定</option>
-                        <option value="realistic">寫實攝影</option>
-                        <option value="illustration">插畫</option>
-                        <option value="anime">動漫風格</option>
-                        <option value="3d">3D 立體風格</option>
-                        <option value="watercolor">水彩畫</option>
-                        <option value="pixel">像素藝術</option>
-                    </select>
-                </div>
-
-
-                <!-- 圖片比例 -->
-                <div class="field-group">
-                    <label>圖片比例</label>
-
-                    <div class="ratio-grid">
-
-                        <label class="ratio-option">
-                            <input type="radio" name="aspect-ratio"
-                                   value="1:1" checked>
-                            <span>1:1</span>
-                        </label>
-
-                        <label class="ratio-option">
-                            <input type="radio" name="aspect-ratio"
-                                   value="3:4">
-                            <span>3:4</span>
-                        </label>
-
-                        <label class="ratio-option">
-                            <input type="radio" name="aspect-ratio"
-                                   value="4:3">
-                            <span>4:3</span>
-                        </label>
-
-                        <label class="ratio-option">
-                            <input type="radio" name="aspect-ratio"
-                                   value="16:9">
-                            <span>16:9</span>
-                        </label>
-
+                    <div class="panel-intro">
+                        <span class="panel-eyebrow">CONFIGURATION</span>
+                        <h2>生成設定</h2>
+                        <p>調整你想要的圖片內容與輸出條件。</p>
                     </div>
-                </div>
-
-
-                <!-- 解析度、圖片數量 -->
-                <div class="field-grid">
 
                     <div class="field-group">
-                        <label for="image-resolution">解析度</label>
+                        <label for="single-prompt">圖片提示詞</label>
 
-                        <select id="image-resolution"
-                                class="control-select">
-                            <option value="512">512</option>
-                            <option value="768" selected>768</option>
-                            <option value="1024">1024</option>
+                        <textarea
+                            id="single-prompt"
+                            rows="5"
+                            placeholder="例如：一座位於森林深處的玻璃建築，陽光穿過樹葉，電影級光影效果..."
+                        ></textarea>
+
+                        <small class="field-hint">
+                            描述主體、場景、光線、構圖與畫面風格。
+                        </small>
+                    </div>
+
+                    <div class="field-group">
+                        <label for="image-style">圖片風格</label>
+
+                        <select id="image-style" class="control-select">
+                            <option value="auto">不指定</option>
+                            <option value="realistic">寫實攝影</option>
+                            <option value="illustration">插畫</option>
+                            <option value="anime">動漫風格</option>
+                            <option value="3d">3D 立體風格</option>
+                            <option value="watercolor">水彩畫</option>
+                            <option value="pixel">像素藝術</option>
                         </select>
                     </div>
 
-
                     <div class="field-group">
-                        <label for="image-count">生成數量</label>
+                        <label>圖片比例</label>
 
-                        <select id="image-count"
-                                class="control-select">
-                            <option value="1">1 張</option>
-                            <option value="2">2 張</option>
-                            <option value="3">3 張</option>
-                            <option value="4">4 張</option>
-                        </select>
+                        <div class="ratio-grid">
+
+                            <label class="ratio-option">
+                                <input type="radio" name="aspect-ratio"
+                                       value="1:1" checked>
+                                <span>1:1</span>
+                            </label>
+
+                            <label class="ratio-option">
+                                <input type="radio" name="aspect-ratio"
+                                       value="3:4">
+                                <span>3:4</span>
+                            </label>
+
+                            <label class="ratio-option">
+                                <input type="radio" name="aspect-ratio"
+                                       value="4:3">
+                                <span>4:3</span>
+                            </label>
+
+                            <label class="ratio-option">
+                                <input type="radio" name="aspect-ratio"
+                                       value="16:9">
+                                <span>16:9</span>
+                            </label>
+
+                        </div>
                     </div>
 
-                </div>
+                    <div class="field-grid">
 
+                        <div class="field-group">
+                            <label for="image-resolution">解析度</label>
 
-                <!-- 參考圖片 -->
-                <div class="field-group">
-                    <label>參考圖片（選填）</label>
+                            <select id="image-resolution"
+                                    class="control-select">
+                                <option value="512">512</option>
+                                <option value="768" selected>768</option>
+                                <option value="1024">1024</option>
+                            </select>
+                        </div>
 
-                    <label for="reference-image-input"
-                           class="upload-dropzone">
+                        <div class="field-group">
+                            <label for="image-count">生成數量</label>
 
-                        <i class="fa-solid fa-cloud-arrow-up"></i>
-
-                        <span>點擊上傳圖片</span>
-
-                        <small>支援常見圖片格式</small>
-
-                    </label>
-
-                    <input
-                        type="file"
-                        id="reference-image-input"
-                        accept="image/*"
-                        class="visually-hidden"
-                    >
-
-                    <div class="reference-preview" id="reference-image-wrap"
-                         hidden>
-
-                        <img id="reference-image-preview" alt="參考圖片預覽">
-
-                        <div class="reference-file-info">
-                            <span id="reference-image-name"></span>
-
-                            <button type="button"
-                                    id="remove-reference-image">
-                                移除
-                            </button>
+                            <select id="image-count"
+                                    class="control-select">
+                                <option value="1">1 張</option>
+                                <option value="2">2 張</option>
+                                <option value="3">3 張</option>
+                                <option value="4">4 張</option>
+                            </select>
                         </div>
 
                     </div>
-                </div>
 
+                    <div class="field-group">
+                        <label>參考圖片（選填）</label>
 
-                <!-- 生成按鈕 -->
-                <button type="submit" class="btn-generate">
+                        <label for="reference-image-input"
+                               class="upload-dropzone">
 
-                    <i class="fa-solid fa-wand-magic-sparkles"></i>
+                            <i class="fa-solid fa-cloud-arrow-up"></i>
+                            <span>點擊上傳圖片</span>
+                            <small>支援常見圖片格式</small>
 
-                    生成圖片
+                        </label>
 
-                </button>
+                        <input
+                            type="file"
+                            id="reference-image-input"
+                            accept="image/*"
+                            class="visually-hidden"
+                        >
 
+                        <div class="reference-preview"
+                             id="reference-image-wrap"
+                             hidden>
 
-                <!-- 狀態提示 -->
-                <p id="single-create-status"
-                   class="creation-status"
-                   role="status"
-                   aria-live="polite">
-                    目前尚未連接圖片生成模型。
-                </p>
+                            <img id="reference-image-preview"
+                                 alt="參考圖片預覽">
 
-            </form>
+                            <div class="reference-file-info">
+                                <span id="reference-image-name"></span>
 
-        </aside>
+                                <button type="button"
+                                        id="remove-reference-image">
+                                    移除
+                                </button>
+                            </div>
 
-
-        <!-- 右側：圖片預覽 -->
-        <section class="preview-panel">
-
-            <div class="preview-heading">
-
-                <div>
-                    <span class="panel-eyebrow">OUTPUT</span>
-                    <h2>圖片預覽</h2>
-                </div>
-
-                <span class="preview-state" id="preview-state">
-                    尚未生成
-                </span>
-
-            </div>
-
-
-            <!-- 預覽畫布 -->
-            <div class="preview-canvas" id="preview-canvas">
-
-                <div class="preview-empty-state">
-
-                    <div class="preview-icon">
-                        <i class="fa-regular fa-image"></i>
+                        </div>
                     </div>
 
-                    <h3>圖片將顯示於此</h3>
+                    <button type="submit" class="btn-generate">
+                        <i class="fa-solid fa-wand-magic-sparkles"></i>
+                        生成圖片
+                    </button>
 
-                    <p>
-                        請先在左側輸入提示詞，
-                        並調整圖片生成設定。
+                    <p id="single-create-status"
+                       class="creation-status"
+                       role="status"
+                       aria-live="polite">
+                        填好設定後按下生成。
                     </p>
+
+                </form>
+
+            </aside>
+
+            <!-- 右側圖片預覽 -->
+
+            <section class="preview-panel">
+
+                <div class="preview-heading">
+
+                    <div>
+                        <span class="panel-eyebrow">OUTPUT</span>
+                        <h2>圖片預覽</h2>
+                    </div>
+
+                    <span class="preview-state" id="preview-state">
+                        尚未生成
+                    </span>
 
                 </div>
 
-            </div>
+                <div class="preview-canvas" id="preview-canvas">
 
+                    <div class="preview-empty-state">
 
-            <!-- 底部說明 -->
-            <footer class="preview-footer">
+                        <div class="preview-icon">
+                            <i class="fa-regular fa-image"></i>
+                        </div>
 
-                <i class="fa-solid fa-circle-info"></i>
+                        <h3>圖片將顯示於此</h3>
 
-                <span>
-                    目前為介面原型，尚未連接圖片生成模型。
-                </span>
+                        <p>
+                            請先在左側輸入提示詞，
+                            並調整圖片生成設定。
+                        </p>
 
-            </footer>
+                    </div>
 
-        </section>
+                </div>
+
+                <footer class="preview-footer">
+                    <i class="fa-solid fa-circle-info"></i>
+                    <span>提示詞會先翻譯成英文，再交給本地模型生圖。</span>
+                </footer>
+
+            </section>
+
+        </div>
+
+    </section>
+
+    <!-- =========================
+         圖庫頁面
+         與單次生成頁面同層
+    ========================= -->
+
+    <section id="gallery-view" class="gallery-page">
+
+        
+<header class="gallery-header">
+
+    <div class="gallery-title-area">
+
+        <button class="menu-toggle"
+                id="btn-toggle-sidebar-gallery"
+                type="button"
+                title="切換側邊欄">
+            <i class="fa-solid fa-bars"></i>
+        </button>
+
+        <div>
+            <span class="creation-eyebrow">IMAGE GALLERY</span>
+            <h1>我的圖庫</h1>
+        </div>
 
     </div>
 
-</section>
+    <div class="gallery-search-wrapper">
+        <i class="fa-solid fa-magnifying-glass"></i>
 
-  <!-- ==================== JavaScript 核心邏輯 ==================== -->
-<script>
-    /*
-     * 吳式單次圖片生成
-     * 僅保留圖片生成工作區、歷史紀錄及參考圖片預覽。
-     * 圖片生成模型尚未串接；送出表單時只會整理設定並顯示狀態。
-     */
+        <input
+            type="text"
+            id="gallery-search"
+            placeholder="搜尋圖片名稱或提示詞..."
+        >
+    </div>
 
-    // 舊版資料沿用原 localStorage key，以便保留先前的單次生成紀錄。
-    function loadSingleSessions() {
-        try {
-            const stored = JSON.parse(
-                localStorage.getItem('gemini_chat_sessions') || '[]'
-            );
+</header>
 
-            if (!Array.isArray(stored)) {
-                return [];
-            }
 
-            // 只保留單次圖片生成紀錄，非單次生成紀錄不再載入。
-            return stored
-                .filter(session => session && session.mode === 'single')
-                .map(session => ({
-                    id: String(session.id || Date.now()),
-                    mode: 'single',
-                    title: typeof session.title === 'string' && session.title.trim()
+        <p class="gallery-description">
+            所有創作圖片都會集中顯示在這裡，最新生成的圖片會排在最前面。
+        </p>
+
+        <div id="gallery-grid" class="gallery-grid"></div>
+
+    </section>
+
+    <!-- =========================
+         JavaScript
+    ========================= -->
+
+    <script>
+        /* =========================
+           1. 載入資料
+        ========================= */
+
+        function normalizeSession(session) {
+            return {
+                id: String(session.id || Date.now()),
+                mode: 'single',
+
+                title:
+                    typeof session.title === 'string' &&
+                    session.title.trim()
                         ? session.title
                         : '單次生成圖片',
-                    titleEdited: Boolean(session.titleEdited),
-                    prompt: session.prompt || '',
-                    style: session.style || '',
-                    proportion: session.proportion || '',
-                    resolution: session.resolution || '',
-                    num: session.num || '',
-                    example: session.example || ''
-                }));
-        } catch (error) {
-            console.warn('讀取圖片生成紀錄失敗，將建立新紀錄：', error);
-            return [];
+
+                titleEdited: Boolean(session.titleEdited),
+
+                createdAt:
+                    Number(session.createdAt) || 0,
+
+                promptText:
+                    typeof session.promptText === 'string'
+                        ? session.promptText
+                        : '',
+
+                prompt: session.prompt || '',
+                style: session.style || '',
+                proportion: session.proportion || '',
+                resolution: session.resolution || '',
+                num: session.num || '',
+                example: session.example || '',
+
+                images: Array.isArray(session.images)
+                    ? session.images.filter(image =>
+                        image &&
+                        typeof image.url === 'string' &&
+                        image.url
+                    )
+                    : []
+            };
         }
-    }
 
-    const state = {
-        sessions: loadSingleSessions(),
-        currentSessionId: null
-    };
+        function loadSingleSessions() {
+            try {
+                const stored = JSON.parse(
+                    localStorage.getItem('gemini_chat_sessions') || '[]'
+                );
 
-    // DOM 元素
-    const sidebar = document.getElementById('sidebar');
-    const newCreateButton = document.getElementById('btn-new-create');
-    const creationMenu = document.getElementById('creation-menu');
-    const singleCreateButton = document.getElementById('btn-single-create');
-    const creationHistory = document.getElementById('creation-history');
+                if (!Array.isArray(stored)) {
+                    return [];
+                }
 
-    const singleCreateView = document.getElementById('single-create-view');
-    const toggleSidebarButton = document.getElementById('btn-toggle-sidebar-create');
+                return stored
+                    .filter(session =>
+                        session && session.mode === 'single'
+                    )
+                    .map(normalizeSession);
 
-    const singleCreateForm = document.getElementById('single-create-form');
-    const singlePrompt = document.getElementById('single-prompt');
-
-    const referenceImageInput = document.getElementById('reference-image-input');
-    const referenceImageWrap = document.getElementById('reference-image-wrap');
-    const referenceImagePreview = document.getElementById('reference-image-preview');
-    const referenceImageName = document.getElementById('reference-image-name');
-    const removeReferenceImageButton = document.getElementById('remove-reference-image');
-
-    const singleCreateStatus = document.getElementById('single-create-status');
-    const previewState = document.getElementById('preview-state');
-
-    let referenceImageObjectUrl = null;
-
-    // 儲存歷史紀錄
-    // 後端位址（需先啟動 Background/server.py）
-    const API_BASE = 'http://127.0.0.1:8000';
-
-    function saveState() {
-        localStorage.setItem(
-            'gemini_chat_sessions',
-            JSON.stringify(state.sessions)
-        );
-
-        // 同步寫入 data/chat_sessions.json（後端沒開時只在主控台警告）
-        fetch(`${API_BASE}/sessions`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(state.sessions)
-        }).catch(error => {
-            console.warn('無法寫入 chat_sessions.json（後端未啟動？）：', error);
-        });
-    }
-
-    // 顯示單次圖片生成工作區
-    function showSingleCreateView() {
-        singleCreateView.classList.add('active');
-        creationMenu.classList.remove('show');
-
-        if (window.innerWidth <= 768) {
-            sidebar.classList.remove('active');
+            } catch (error) {
+                console.warn('讀取圖片生成紀錄失敗：', error);
+                return [];
+            }
         }
-    }
 
-    // 建立新的單次圖片生成紀錄
-    function createNewSession() {
-        const newSession = {
-            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            mode: 'single',
-            title: '單次生成圖片',
-            titleEdited: false,
-            prompt: '',
-            style: '',
-            proportion: '',
-            resolution: '',
-            num: '',
-            example: ''
+        const state = {
+            sessions: loadSingleSessions(),
+            currentSessionId: null,
+            searchKeyword: ''
         };
 
-        state.sessions.unshift(newSession);
-        state.currentSessionId = newSession.id;
+        /* =========================
+           2. DOM 元素
+        ========================= */
 
-        saveState();
-        renderSidebar();
+        const sidebar = document.getElementById('sidebar');
 
-        return newSession;
-    }
+        const creationHistory =
+            document.getElementById('creation-history');
 
-    // 安全處理歷史紀錄標題，避免 HTML 注入。
-    function escapeHtml(value) {
-        return String(value).replace(/[&<>"']/g, char => ({
-            '&': '&amp;',
-            '<': '&lt;',
-            '>': '&gt;',
-            '"': '&quot;',
-            "'": '&#039;'
-        })[char]);
-    }
+        const singleCreateView =
+            document.getElementById('single-create-view');
 
-    // 顯示圖片生成歷史紀錄
-    function renderSidebar() {
-        creationHistory.innerHTML = '';
+        const galleryButton =
+            document.getElementById('gallery-button');
 
-        state.sessions.forEach(session => {
-            const item = document.createElement('div');
+        const galleryView =
+            document.getElementById('gallery-view');
 
-            item.className = `history-item ${
-                session.id === state.currentSessionId ? 'active' : ''
-            }`;
+        const galleryGrid =
+            document.getElementById('gallery-grid');
 
-            item.innerHTML = `
-                <span class="history-title">
-                    <i class="fa-solid fa-image"></i>
-                    ${escapeHtml(session.title)}
-                </span>
-                <span class="history-actions">
-                    <button type="button" class="rename-btn" title="重新命名"
-                            aria-label="重新命名">
-                        <i class="fa-solid fa-pen"></i>
-                    </button>
-                    <button type="button" class="delete-btn" title="刪除紀錄"
-                            aria-label="刪除紀錄">
-                        <i class="fa-solid fa-trash"></i>
-                    </button>
-                </span>
-            `;
+        const gallerySearch =
+            document.getElementById('gallery-search');
 
-            item.addEventListener('click', event => {
-                if (event.target.closest('.rename-btn')) {
-                    event.stopPropagation();
+        const toggleSidebarButton =
+            document.getElementById('btn-toggle-sidebar-create');
+        const toggleSidebarGalleryButton = document.getElementById('btn-toggle-sidebar-gallery');
+        const singleCreateForm =
+            document.getElementById('single-create-form');
 
-                    const newTitle = prompt('請輸入新的創作名稱：', session.title);
-                    if (newTitle === null) return;
+        const singlePrompt =
+            document.getElementById('single-prompt');
 
-                    const trimmedTitle = newTitle.trim();
-                    if (!trimmedTitle) {
-                        alert('名稱不能空白！');
-                        return;
+        const referenceImageInput =
+            document.getElementById('reference-image-input');
+
+        const referenceImageWrap =
+            document.getElementById('reference-image-wrap');
+
+        const referenceImagePreview =
+            document.getElementById('reference-image-preview');
+
+        const referenceImageName =
+            document.getElementById('reference-image-name');
+
+        const removeReferenceImageButton =
+            document.getElementById('remove-reference-image');
+
+        const singleCreateStatus =
+            document.getElementById('single-create-status');
+
+        const previewState =
+            document.getElementById('preview-state');
+
+        let referenceImageObjectUrl = null;
+
+        /* =========================
+           3. 儲存資料
+        ========================= */
+
+        // 後端位址（需先啟動 Background/server.py）
+        const API_BASE = 'http://127.0.0.1:8000';
+
+        // 已刪除的紀錄 id：避免合併時又從檔案裡跑回來
+        function loadDeletedIds() {
+            try {
+                return new Set(JSON.parse(
+                    localStorage.getItem('deleted_session_ids') || '[]'
+                ));
+            } catch (error) {
+                return new Set();
+            }
+        }
+
+        const deletedIds = loadDeletedIds();
+
+        // 成功讀過檔案之後才允許寫入，避免蓋掉檔案裡的紀錄
+        let fileMerged = false;
+        let mergePromise = null;
+
+        // 啟動時自動建立的空白紀錄
+        let autoCreatedSession = null;
+
+        function saveLocal() {
+            localStorage.setItem(
+                'gemini_chat_sessions',
+                JSON.stringify(state.sessions)
+            );
+            localStorage.setItem(
+                'deleted_session_ids',
+                JSON.stringify([...deletedIds])
+            );
+        }
+
+        function saveState() {
+            saveLocal();
+
+            if (fileMerged) {
+                writeFile();
+            } else {
+                mergeFromFile();
+            }
+        }
+
+        // 寫入 data/chat_sessions.json（後端沒開時只在主控台警告）
+        function writeFile() {
+            fetch(`${API_BASE}/sessions`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(state.sessions)
+            }).then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+            }).catch(error => {
+                console.warn('無法寫入 chat_sessions.json：', error);
+            });
+        }
+
+        // 讀取檔案並併入目前紀錄；同一個 id 以瀏覽器的內容為準
+        function mergeFromFile() {
+            mergePromise ??= fetch(`${API_BASE}/sessions`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(stored => {
+                    if (!Array.isArray(stored)) {
+                        throw new Error('檔案內容不是陣列');
                     }
 
-                    session.title = trimmedTitle;
-                    session.titleEdited = true;
-                    saveState();
+                    applyFileSessions(stored
+                        .filter(session => session && session.id)
+                        .map(normalizeSession)
+                        .filter(session => !deletedIds.has(session.id)));
+
+                    keepOneSession();
+                    if (!singlePrompt.value) {
+                        singlePrompt.value =
+                            getCurrentSession()?.promptText || '';
+                    }
                     renderSidebar();
-                    return;
-                }
+                    renderGallery();
+                    renderPreview();
 
-                if (event.target.closest('.delete-btn')) {
-                    event.stopPropagation();
-                    deleteSession(session.id);
-                    return;
-                }
+                    fileMerged = true;
+                    saveLocal();
+                    writeFile();
+                })
+                .catch(error => {
+                    console.warn(
+                        '無法讀取 chat_sessions.json，暫不寫入：', error
+                    );
+                })
+                .finally(() => {
+                    mergePromise = null;
+                });
+        }
 
-                state.currentSessionId = session.id;
-                saveState();
-                renderSidebar();
-                showSingleCreateView();
+        // 目前只用一筆紀錄：有內容的優先，其次取最新的；其他筆的圖片併進來
+        function keepOneSession() {
+            if (state.sessions.length === 0) return;
+
+            const hasContent = session =>
+                Boolean(session.promptText) || session.images.length > 0;
+
+            const [kept, ...others] = [...state.sessions].sort((a, b) =>
+                (hasContent(b) - hasContent(a)) ||
+                (b.createdAt - a.createdAt)
+            );
+
+            others.forEach(other => {
+                other.images
+                    .filter(image =>
+                        !kept.images.some(item => item.url === image.url)
+                    )
+                    .forEach(image => kept.images.push(image));
             });
 
-            creationHistory.appendChild(item);
-        });
-    }
+            state.sessions = [kept];
+            state.currentSessionId = kept.id;
+        }
 
-    // 刪除圖片生成紀錄
-    function deleteSession(id) {
-        state.sessions = state.sessions.filter(session => session.id !== id);
+        function applyFileSessions(fileSessions) {
+            if (fileSessions.length === 0) return;
 
-        if (state.sessions.length === 0) {
-            state.currentSessionId = null;
-            createNewSession();
-        } else {
-            if (state.currentSessionId === id) {
-                state.currentSessionId = state.sessions[0].id;
+            // 有舊紀錄可用時，丟掉剛剛自動建立、還沒用過的空白紀錄
+            const blank = autoCreatedSession;
+
+            if (
+                blank &&
+                !blank.promptText &&
+                !blank.titleEdited &&
+                blank.images.length === 0 &&
+                !singlePrompt.value
+            ) {
+                state.sessions = state.sessions.filter(
+                    session => session !== blank
+                );
             }
+
+            fileSessions.forEach(fileSession => {
+                const local = state.sessions.find(
+                    session => session.id === fileSession.id
+                );
+
+                if (!local) {
+                    state.sessions.push(fileSession);
+                    return;
+                }
+
+                fileSession.images
+                    .filter(image =>
+                        !local.images.some(item => item.url === image.url)
+                    )
+                    .forEach(image => local.images.push(image));
+            });
+
+            state.sessions.sort((a, b) => b.createdAt - a.createdAt);
+
+            if (!getCurrentSession()) {
+                state.currentSessionId = state.sessions[0].id;
+                singlePrompt.value = state.sessions[0].promptText || '';
+            }
+
+            renderSidebar();
+            renderGallery();
+            renderPreview();
+        }
+
+        /* =========================
+           4. 取得目前創作
+        ========================= */
+
+        function getCurrentSession() {
+            return state.sessions.find(
+                session => session.id === state.currentSessionId
+            ) || null;
+        }
+
+        /* =========================
+           5. 切換頁面
+        ========================= */
+
+        function showSingleCreateView() {
+            galleryView.classList.remove('active');
+            singleCreateView.classList.add('active');
+
+            if (window.innerWidth <= 768) {
+                sidebar.classList.remove('active');
+            }
+        }
+
+        function showGalleryView() {
+            singleCreateView.classList.remove('active');
+            galleryView.classList.add('active');
+
+            renderGallery();
+
+            if (window.innerWidth <= 768) {
+                sidebar.classList.remove('active');
+            }
+        }
+
+        /* =========================
+           6. 建立新創作
+        ========================= */
+
+        function createNewSession() {
+            const newSession = {
+                id: `${Date.now()}-${Math.random()
+                    .toString(36).slice(2, 8)}`,
+
+                mode: 'single',
+                title: '單次生成圖片',
+                titleEdited: false,
+
+                createdAt: Date.now(),
+                prompt: '',
+                style: '',
+                proportion: '',
+                resolution: '',
+                num: '',
+                example: '',
+                promptText: '',
+                images: []
+            };
+
+            state.sessions.unshift(newSession);
+            state.currentSessionId = newSession.id;
+
+            singlePrompt.value = '';
+            singleCreateStatus.textContent =
+                '填好設定後按下生成。';
+
+            previewState.textContent = '尚未生成';
 
             saveState();
             renderSidebar();
+
+            return newSession;
         }
 
-        showSingleCreateView();
-    }
+        /* =========================
+           7. 載入指定創作
+        ========================= */
 
-    // 切換側邊欄
-    function toggleSidebar() {
-        if (window.innerWidth <= 768) {
-            sidebar.classList.toggle('active');
-        } else {
-            sidebar.classList.toggle('collapsed');
+        function loadSession(session) {
+            state.currentSessionId = session.id;
+
+            singlePrompt.value = session.promptText || '';
+
+            singleCreateStatus.textContent =
+                '已載入創作紀錄。';
+
+            saveState();
+            renderSidebar();
+            showSingleCreateView();
+            renderPreview();
         }
-    }
 
-    // 新增創作：展開僅包含「單次生成」的選單
-    newCreateButton.addEventListener('click', () => {
-        creationMenu.classList.toggle('show');
+        /* =========================
+           8. HTML 安全處理
+        ========================= */
+
+        function escapeHtml(value) {
+            return String(value).replace(/[&<>"']/g, char => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#039;'
+            })[char]);
+        }
+
+        /* =========================
+           9. 顯示歷史紀錄
+        ========================= */
+
+        function renderSidebar() {
+    creationHistory.innerHTML = '';
+
+    const keyword =
+        state.searchKeyword.trim().toLowerCase();
+
+    const filteredSessions = state.sessions.filter(session => {
+        const title = session.title || '';
+        const prompt = session.promptText || '';
+
+        return `${title} ${prompt}`
+            .toLowerCase()
+            .includes(keyword);
     });
 
-    // 建立單次圖片生成紀錄
-    singleCreateButton.addEventListener('click', () => {
+    if (filteredSessions.length === 0) {
+        const emptyMessage = document.createElement('p');
+
+        emptyMessage.textContent = keyword
+            ? '找不到符合的創作紀錄。'
+            : '目前沒有創作紀錄。';
+
+        emptyMessage.style.padding = '12px';
+        emptyMessage.style.color = 'var(--text-muted)';
+        emptyMessage.style.fontSize = '12px';
+
+        creationHistory.appendChild(emptyMessage);
+        return;
+    }
+
+    filteredSessions.forEach(session => {
+        const item = document.createElement('div');
+
+        item.className = 'history-item';
+
+        if (session.id === state.currentSessionId) {
+            item.classList.add('active');
+        }
+
+        item.innerHTML = `
+            <span class="history-title">
+                <i class="fa-solid fa-image"></i>
+                <span class="history-title-text">
+                    ${escapeHtml(session.title || '')}
+                </span>
+            </span>
+
+            <span class="history-actions">
+                <button type="button"
+                        class="rename-btn"
+                        title="重新命名"
+                        aria-label="重新命名">
+                    <i class="fa-solid fa-pen"></i>
+                </button>
+
+                <button type="button"
+                        class="delete-btn"
+                        title="刪除紀錄"
+                        aria-label="刪除紀錄">
+                    <i class="fa-solid fa-trash"></i>
+                </button>
+            </span>
+        `;
+
+        item.addEventListener('click', event => {
+
+            /* 重新命名 */
+
+            if (event.target.closest('.rename-btn')) {
+                event.stopPropagation();
+
+                const titleText =
+                    item.querySelector('.history-title-text');
+                const titleContainer =
+    item.querySelector('.history-title');
+                const input = document.createElement('input');
+
+                input.type = 'text';
+                input.className = 'history-title-input';
+                input.value = session.title || '';
+                input.placeholder = '輸入創作名稱';
+
+                titleContainer.classList.add('editing');
+titleText.replaceWith(input);
+
+                input.focus();
+                input.select();
+
+                let finished = false;
+
+                function finishRename(shouldSave, refreshSidebar) {
+                    if (finished) return;
+
+                    finished = true;
+
+                    if (shouldSave) {
+                        const trimmedTitle = input.value.trim();
+
+                        if (trimmedTitle) {
+                            session.title = trimmedTitle;
+                            session.titleEdited = true;
+
+                            saveState();
+                            renderGallery();
+                        }
+                    }
+
+                    titleText.textContent = session.title || '';
+                    input.replaceWith(titleText);
+
+                    if (refreshSidebar) {
+                        renderSidebar();
+                    }
+                }
+
+                // Enter：儲存名稱
+                input.addEventListener('keydown', event => {
+                    if (event.key === 'Enter') {
+                        event.preventDefault();
+                        finishRename(true, true);
+                    }
+
+                    // Escape：取消修改
+                    if (event.key === 'Escape') {
+                        event.preventDefault();
+                        finishRename(false, true);
+                    }
+                });
+
+                // 離開輸入欄位時自動儲存
+                input.addEventListener('blur', () => {
+                    finishRename(true, false);
+                });
+
+                return;
+            }
+
+            /* 刪除 */
+
+            if (event.target.closest('.delete-btn')) {
+                event.stopPropagation();
+
+                deleteSession(session.id);
+                return;
+            }
+
+            /* 避免點擊輸入欄位時開啟創作 */
+
+            if (event.target.closest('.history-title-input')) {
+                event.stopPropagation();
+                return;
+            }
+
+            /* 開啟創作 */
+
+            loadSession(session);
+        });
+
+        creationHistory.appendChild(item);
+    });
+}
+
+        /* =========================
+           10. 刪除創作
+        ========================= */
+
+        function deleteSession(id) {
+
+    deletedIds.add(id);
+
+    // 直接刪除創作紀錄
+    state.sessions = state.sessions.filter(
+        session => session.id !== id
+    );
+
+    if (state.currentSessionId === id) {
+        state.currentSessionId =
+            state.sessions.length > 0
+                ? state.sessions[0].id
+                : null;
+    }
+
+    if (!state.currentSessionId) {
         createNewSession();
-        showSingleCreateView();
-    });
+    } else {
+        const currentSession = getCurrentSession();
 
-    // 圖片工作區的側邊欄按鈕
-    toggleSidebarButton.addEventListener('click', toggleSidebar);
-
-    // 選擇參考圖片
-    referenceImageInput.addEventListener('change', () => {
-        const file = referenceImageInput.files[0];
-        if (!file) return;
-
-        if (!file.type.startsWith('image/')) {
-            alert('請選擇圖片檔案！');
-            referenceImageInput.value = '';
-            return;
-        }
-
-        if (referenceImageObjectUrl) {
-            URL.revokeObjectURL(referenceImageObjectUrl);
-        }
-
-        referenceImageObjectUrl = URL.createObjectURL(file);
-        referenceImagePreview.src = referenceImageObjectUrl;
-        referenceImageName.textContent = file.name;
-        referenceImageWrap.hidden = false;
-    });
-
-    // 移除參考圖片
-    removeReferenceImageButton.addEventListener('click', () => {
-        if (referenceImageObjectUrl) {
-            URL.revokeObjectURL(referenceImageObjectUrl);
-            referenceImageObjectUrl = null;
-        }
-
-        referenceImagePreview.removeAttribute('src');
-        referenceImageInput.value = '';
-        referenceImageWrap.hidden = true;
-    });
-
-    // 單次圖片生成表單
-    singleCreateForm.addEventListener('submit', event => {
-        event.preventDefault();
-
-        const promptText = singlePrompt.value.trim();
-        if (!promptText) {
-            singleCreateStatus.textContent = '請先輸入圖片提示詞。';
-            singlePrompt.focus();
-            return;
-        }
-
-        const negativePrompt = document.getElementById('negative-prompt').value.trim();
-        const selectedRatio = singleCreateForm.querySelector(
-            'input[name="aspect-ratio"]:checked'
-        );
-
-        if (!selectedRatio) {
-            singleCreateStatus.textContent = '請選擇圖片比例。';
-            return;
-        }
-
-        const ratio = selectedRatio.value;
-        const styleSelect = document.getElementById('image-style');
-        const styleText = styleSelect.options[styleSelect.selectedIndex].textContent;
-        const resolution = document.getElementById('image-resolution').value;
-        const count = document.getElementById('image-count').value;
-
-        singleCreateStatus.textContent =
-            `提示詞已讀取。風格：${styleText}；比例：${ratio}；解析度：${resolution}；數量：${count} 張。`;
-
-        previewState.textContent = '';
-        singleCreateStatus.textContent +=
-            ' ';
-
-        // 寫入目前創作紀錄，並同步到 data/chat_sessions.json
-        const currentSession = state.sessions.find(
-            session => session.id === state.currentSessionId
-        );
         if (currentSession) {
+            singlePrompt.value =
+                currentSession.promptText || '';
+        }
+    }
+
+    saveState();
+    renderSidebar();
+    renderGallery();
+
+    showSingleCreateView();
+    renderPreview();
+}
+
+        /* =========================
+           11. 側邊欄收合
+        ========================= */
+
+        function toggleSidebar() {
+            if (window.innerWidth <= 768) {
+                sidebar.classList.toggle('active');
+            } else {
+                sidebar.classList.toggle('collapsed');
+            }
+        }
+
+        /* =========================
+           12. 圖庫
+        ========================= */
+
+        function renderGallery() {
+            galleryGrid.innerHTML = '';
+
+            /*
+             * 將所有 session 裡的圖片合併成一個陣列。
+             * 一個 session 可以有多張圖片。
+             */
+
+            const allImages = state.sessions.flatMap(session =>
+                (session.images || []).map(image => ({
+                    ...image,
+                    sessionTitle: session.title || '未命名創作',
+                    promptText: session.promptText || ''
+                }))
+            );
+
+            /*
+             * createdAt 越大代表時間越新。
+             * 因此使用 b - a，最新圖片排在最前面。
+             */
+
+            allImages.sort((a, b) =>
+                (Number(b.createdAt) || 0) -
+                (Number(a.createdAt) || 0)
+            );
+
+            const keyword =
+                gallerySearch.value.trim().toLowerCase();
+
+            const filteredImages = allImages.filter(image => {
+                const title = image.sessionTitle || '';
+                const prompt = image.promptText || '';
+
+                return `${title} ${prompt}`
+                    .toLowerCase()
+                    .includes(keyword);
+            });
+
+            /* 沒有圖片 */
+
+            if (filteredImages.length === 0) {
+                const emptyMessage = document.createElement('div');
+
+                emptyMessage.className = 'gallery-empty';
+
+                if (keyword) {
+                    emptyMessage.innerHTML = `
+                        <i class="fa-solid fa-magnifying-glass"></i>
+                        找不到符合搜尋條件的圖片。
+                    `;
+                } else {
+                    emptyMessage.innerHTML = `
+                        <i class="fa-regular fa-images"></i>
+                        <strong>目前還沒有生成圖片</strong>
+                        <p>
+                            連接圖片生成 API 並儲存生成結果後，
+                            圖片就會自動顯示在這裡。
+                        </p>
+                    `;
+                }
+
+                galleryGrid.appendChild(emptyMessage);
+                return;
+            }
+
+            /* 建立圖片卡片 */
+
+            filteredImages.forEach(image => {
+                const card = document.createElement('article');
+
+                card.className = 'gallery-card';
+
+                const img = document.createElement('img');
+
+                img.src = image.url;
+                img.alt = image.sessionTitle;
+                img.loading = 'lazy';
+
+                img.onerror = () => {
+                    img.alt = '圖片載入失敗';
+                };
+
+                const info = document.createElement('div');
+
+                info.className = 'gallery-info';
+
+                const title = document.createElement('strong');
+                title.textContent = image.sessionTitle;
+
+                const prompt = document.createElement('p');
+                prompt.textContent =
+                    image.promptText || '沒有提示詞資料';
+
+                const date = document.createElement('span');
+
+                date.className = 'gallery-date';
+
+                const timestamp = Number(image.createdAt);
+
+                date.textContent = Number.isFinite(timestamp) && timestamp > 0
+                    ? new Date(timestamp).toLocaleString('zh-TW')
+                    : '建立時間未知';
+
+                info.appendChild(title);
+                info.appendChild(prompt);
+                info.appendChild(date);
+
+                card.appendChild(img);
+                card.appendChild(info);
+
+                galleryGrid.appendChild(card);
+            });
+        }
+
+        /* =========================
+           13. 事件監聽
+        ========================= */
+
+        galleryButton.addEventListener('click', () => {
+            showGalleryView();
+        });
+
+        toggleSidebarButton.addEventListener(
+            'click',
+            toggleSidebar
+        );
+        toggleSidebarGalleryButton.addEventListener(
+    'click',
+    toggleSidebar
+);
+        gallerySearch.addEventListener(
+            'input',
+            renderGallery
+        );
+
+        /* =========================
+           14. 參考圖片上傳
+        ========================= */
+
+        referenceImageInput.addEventListener('change', () => {
+            const file = referenceImageInput.files[0];
+
+            if (!file) return;
+
+            if (!file.type.startsWith('image/')) {
+                alert('請選擇圖片檔案！');
+                referenceImageInput.value = '';
+                return;
+            }
+
+            if (referenceImageObjectUrl) {
+                URL.revokeObjectURL(referenceImageObjectUrl);
+            }
+
+            referenceImageObjectUrl =
+                URL.createObjectURL(file);
+
+            referenceImagePreview.src =
+                referenceImageObjectUrl;
+
+            referenceImageName.textContent =
+                file.name;
+
+            referenceImageWrap.hidden = false;
+        });
+
+        /* =========================
+           15. 移除參考圖片
+        ========================= */
+
+        removeReferenceImageButton.addEventListener(
+            'click',
+            () => {
+                if (referenceImageObjectUrl) {
+                    URL.revokeObjectURL(
+                        referenceImageObjectUrl
+                    );
+
+                    referenceImageObjectUrl = null;
+                }
+
+                referenceImagePreview.removeAttribute('src');
+                referenceImageInput.value = '';
+                referenceImageWrap.hidden = true;
+            }
+        );
+
+        /* =========================
+           16. 圖片生成表單
+        ========================= */
+
+        singleCreateForm.addEventListener('submit', event => {
+            event.preventDefault();
+
+            if (isGenerating) return;
+
+            const promptText = singlePrompt.value.trim();
+
+            /* 先檢查提示詞 */
+
+            if (!promptText) {
+                singleCreateStatus.textContent =
+                    '請先輸入圖片提示詞。';
+
+                singlePrompt.focus();
+                return;
+            }
+
+            const selectedRatio =
+                singleCreateForm.querySelector(
+                    'input[name="aspect-ratio"]:checked'
+                );
+
+            if (!selectedRatio) {
+                singleCreateStatus.textContent =
+                    '請選擇圖片比例。';
+
+                return;
+            }
+
+            const currentSession = getCurrentSession();
+
+            if (!currentSession) {
+                singleCreateStatus.textContent =
+                    '目前沒有可用的創作紀錄。';
+
+                return;
+            }
+
+            /*
+             * 驗證成功後才更新資料，
+             * 避免空白提示詞覆蓋原本的資料。
+             */
+
+            currentSession.promptText = promptText;
+
+            const ratio = selectedRatio.value;
+
+            const styleSelect =
+                document.getElementById('image-style');
+
+            const styleText =
+                styleSelect.options[
+                    styleSelect.selectedIndex
+                ].textContent;
+
+            const resolution =
+                document.getElementById('image-resolution').value;
+
+            const count =
+                document.getElementById('image-count').value;
+
+            // 寫入 chat_sessions.json 用的欄位
             currentSession.prompt = promptText;
             currentSession.style = styleText;
             currentSession.proportion = ratio;
@@ -1455,37 +1982,168 @@
             currentSession.example = referenceImageInput.files[0]
                 ? referenceImageInput.files[0].name
                 : '';
-            saveState();
-        }
 
-        // 保留資料供後續圖片生成模型串接。
-        console.log('圖片提示詞：', promptText);
-        console.log('負面提示詞：', negativePrompt);
-        console.log('圖片比例：', ratio);
-        console.log('圖片風格：', styleText);
-        console.log('解析度：', resolution);
-        console.log('生成數量：', count);
-        console.log('參考圖片：', referenceImageInput.files[0] || null);
-    });
-
-    // 啟動：只載入單次圖片生成紀錄。
-    function init() {
-        state.sessions = state.sessions.filter(
-            session => session.mode === 'single'
-        );
-
-        if (state.sessions.length === 0) {
-            createNewSession();
-        } else {
-            state.currentSessionId = state.sessions[0].id;
             saveState();
             renderSidebar();
+
+            generateImages(currentSession, {
+                flow: false,
+                prompt: promptText,
+                style: styleText,
+                aspect_ratio: toAspectRatio(ratio),
+                resolution: toSize(ratio, Number(resolution)),
+                count: 1
+            }, Number(count), Boolean(referenceImageInput.files[0]));
+        });
+
+        /* =========================
+           呼叫 image_api.py：翻譯 → 生圖 → 存到 data/photo
+        ========================= */
+
+        // 後端位址（需先啟動 Background/image_api.py 和 server.py）
+        const IMAGE_API = 'http://127.0.0.1:8002';
+        let isGenerating = false;
+
+        function toAspectRatio(ratio) {
+            const [width, height] = ratio.split(':').map(Number);
+            return { width, height };
         }
 
-        showSingleCreateView();
-    }
+        // 解析度當作長邊，另一邊依比例換算
+        function toSize(ratio, longSide) {
+            const { width, height } = toAspectRatio(ratio);
+            const scale = longSide / Math.max(width, height);
 
-    init();
-  </script>
+            return {
+                width: Math.round(width * scale),
+                height: Math.round(height * scale)
+            };
+        }
+
+        // 右側預覽顯示目前這筆創作的圖片
+        function renderPreview() {
+            const canvas = document.getElementById('preview-canvas');
+            const emptyState = canvas.querySelector('.preview-empty-state');
+            const images = getCurrentSession()?.images || [];
+
+            canvas.querySelectorAll('.preview-result')
+                .forEach(element => element.remove());
+
+            emptyState.style.display = images.length ? 'none' : '';
+
+            images.slice(-4).forEach(image => {
+                const img = document.createElement('img');
+
+                img.className = 'preview-result';
+                img.src = image.url;
+                img.alt = '生成圖片';
+
+                canvas.appendChild(img);
+            });
+
+            previewState.textContent =
+                images.length ? '已生成' : '尚未生成';
+        }
+
+        // 一次只要一張：生圖很久，分開送可避免瀏覽器等太久逾時
+        async function generateImages(session, payload, total, hasReference) {
+            const button = singleCreateForm.querySelector('.btn-generate');
+            const note = hasReference ? '（參考圖片尚未支援，本次不使用）' : '';
+            let done = 0;
+
+            isGenerating = true;
+            button.disabled = true;
+
+            try {
+                for (let i = 1; i <= total; i++) {
+                    singleCreateStatus.textContent =
+                        `翻譯並生成第 ${i}/${total} 張，可能需要幾分鐘…${note}`;
+                    previewState.textContent = '生成中';
+
+                    const response = await fetch(
+                        `${IMAGE_API}/api/v1/image-generation`,
+                        {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        }
+                    );
+
+                    const result = await response.json();
+
+                    if (!response.ok || result.status !== 'completed') {
+                        throw new Error(
+                            result.error?.message || `HTTP ${response.status}`
+                        );
+                    }
+
+                    // 生成期間這筆紀錄可能已被刪除
+                    if (!state.sessions.includes(session)) return;
+
+                    result.images.forEach(item => {
+                        session.images.push({
+                            url: `${IMAGE_API}${item.url}`,
+                            createdAt: Date.now()
+                        });
+                        done++;
+                    });
+
+                    saveState();
+                    renderGallery();
+                    renderPreview();
+                }
+
+                singleCreateStatus.textContent =
+                    `完成，共生成 ${done} 張。${note}`;
+
+            } catch (error) {
+                console.error('生成失敗：', error);
+
+                const reason = error instanceof TypeError
+                    ? '無法連線到 image_api.py，請確認後端已啟動。'
+                    : error.message;
+
+                singleCreateStatus.textContent =
+                    `生成失敗（已完成 ${done}/${total} 張）：${reason}`;
+                previewState.textContent = '生成失敗';
+
+            } finally {
+                isGenerating = false;
+                button.disabled = false;
+            }
+        }
+
+        /* =========================
+           17. 初始化
+        ========================= */
+
+        function init() {
+            keepOneSession();
+
+            if (state.sessions.length === 0) {
+                autoCreatedSession = createNewSession();
+            } else {
+                state.currentSessionId =
+                    state.sessions[0].id;
+
+                saveState();
+            }
+
+            const currentSession = getCurrentSession();
+
+            if (currentSession) {
+                singlePrompt.value =
+                    currentSession.promptText || '';
+            }
+
+            renderSidebar();
+            renderPreview();
+            showSingleCreateView();
+        }
+
+        init();
+
+    </script>
+
 </body>
 </html>
