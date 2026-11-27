@@ -1,12 +1,17 @@
 [
   {
-    "id": "1794244067951",
-    "titleEdited": false,
-    "prompt": " ",
-    "style": " ",
-    "proportion": " ",
-    "resolution": " ",
-    "num": " ",
-    "example": " "
+    "id": "1795347943842",
+    "mode": "single",
+    "title": "單次生成圖片",
+    "titleEdited": true,
+    "createdAt": 1795758038368,
+    "promptText": "",
+    "prompt": "",
+    "style": "",
+    "proportion": "",
+    "resolution": "",
+    "num": "",
+    "example": "",
+    "images": []
   }
 ]

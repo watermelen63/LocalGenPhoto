@@ -96,6 +96,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Local ImageGen API (contract v1.0.0)", lifespan=lifespan)
 
+# 前端 HTML 若是直接用檔案開啟（file://）也要能呼叫 API
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
