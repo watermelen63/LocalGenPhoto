@@ -1,10 +1,11 @@
 """
 PostgreSQL 資料庫模組（SQLAlchemy 2.0 + psycopg v3）
 
-管理三張主要資料表：
+管理四張主要資料表：
 1. chat_sessions       取代 data/chat_sessions.json（前端創作工作區紀錄）
 2. photo_records       取代 data/photo.json（API 契約圖片與版本紀錄，實體 PNG 仍存於 data/photo/）
 3. generation_records  紀錄 server.py /generate 單次推論參數與耗時
+4. conversations       保存 llm_api.py / image_api.py 多輪對話上下文（依 conversation_id）
 
 連線字串讀取順序：
     環境變數 DATABASE_URL -> 專案根目錄 .env -> 預設本機連線字串
@@ -147,6 +148,27 @@ class GenerationRecordModel(Base):
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
+    )
+
+
+class ConversationModel(Base):
+    """對應 llm_api.py / image_api.py 的多輪對話上下文（依 conversation_id 管理）。"""
+
+    __tablename__ = "conversations"
+
+    conversation_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    messages_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    image_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )
 
 
@@ -563,3 +585,59 @@ def get_generation_history(limit: int = 20, offset: int = 0) -> list[dict[str, A
             ]
     except SQLAlchemyError as exc:
         raise DatabaseUnavailableError(f"讀取生圖歷史失敗：{exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# Conversations CRUD（供 Background/llm_api.py 與 Background/image_api.py 使用）
+# ---------------------------------------------------------------------------
+def _conversation_model_to_dict(row: ConversationModel) -> dict[str, Any]:
+    try:
+        messages = json.loads(row.messages_json or "[]")
+        if not isinstance(messages, list):
+            messages = []
+    except json.JSONDecodeError:
+        messages = []
+    return {
+        "conversation_id": row.conversation_id,
+        "messages": messages,
+        "image_prompt": row.image_prompt,
+    }
+
+
+def get_conversation_record(conversation_id: str) -> dict[str, Any] | None:
+    try:
+        with get_session() as db:
+            row = db.get(ConversationModel, conversation_id)
+            return _conversation_model_to_dict(row) if row is not None else None
+    except SQLAlchemyError as exc:
+        raise DatabaseUnavailableError(f"讀取對話紀錄失敗：{exc}") from exc
+
+
+def save_conversation_record(
+    conversation_id: str,
+    messages: list[dict[str, Any]],
+    image_prompt: str | None = None,
+) -> dict[str, Any]:
+    try:
+        with get_session() as db:
+            row = db.get(ConversationModel, conversation_id)
+            serialized = json.dumps(messages, ensure_ascii=False)
+            now = datetime.now(timezone.utc)
+            if row is None:
+                row = ConversationModel(
+                    conversation_id=conversation_id,
+                    messages_json=serialized,
+                    image_prompt=image_prompt,
+                    created_at=now,
+                    updated_at=now,
+                )
+                db.add(row)
+            else:
+                row.messages_json = serialized
+                row.image_prompt = image_prompt
+                row.updated_at = now
+            db.commit()
+            db.refresh(row)
+            return _conversation_model_to_dict(row)
+    except SQLAlchemyError as exc:
+        raise DatabaseUnavailableError(f"寫入對話紀錄失敗：{exc}") from exc

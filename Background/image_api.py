@@ -36,34 +36,37 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 try:
     from database import (
         DatabaseUnavailableError,
         find_photo_record,
+        get_conversation_record,
         init_db,
         insert_photo_record,
         load_photo_records,
+        save_conversation_record,
     )
 except ImportError:
     from Background.database import (
         DatabaseUnavailableError,
         find_photo_record,
+        get_conversation_record,
         init_db,
         insert_photo_record,
         load_photo_records,
+        save_conversation_record,
     )
 
 from llm_api import (
     ChatRequest,
     LLMError,
     SingleGenerationRequest,
-    _conversations,
     call_llm,
     translate_to_english,
     error_response,
-    get_conversation,
     new_request_id,
 )
 from llm_api import _lock as _conv_lock
@@ -92,6 +95,13 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Local ImageGen API (contract v1.0.0)", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.exception_handler(RequestValidationError)
@@ -270,20 +280,20 @@ def handle_chat(req: ChatRequest):
         user_text = req.message
 
     with _conv_lock:
-        conv = get_conversation(req.conversation_id)
-        conv["messages"].append({"role": "user", "content": user_text})
-        history = list(conv["messages"])
+        existing = get_conversation_record(req.conversation_id)
+        messages = list(existing["messages"]) if existing else []
+        prev_prompt = existing["image_prompt"] if existing else None
+        history = [*messages, {"role": "user", "content": user_text}]
 
     try:
         result = call_llm(history)
     except LLMError as err:
-        with _conv_lock:
-            conv["messages"].pop()
         return error_response(503, "LLM_UNAVAILABLE", str(err), retryable=True)
 
     if result["need_more_info"] and result["question"]:
         with _conv_lock:
-            conv["messages"].append({"role": "assistant", "content": result["question"]})
+            updated_messages = [*history, {"role": "assistant", "content": result["question"]}]
+            save_conversation_record(req.conversation_id, updated_messages, prev_prompt)
         return {
             "request_id": new_request_id(),
             "status": "needs_clarification",
@@ -294,8 +304,8 @@ def handle_chat(req: ChatRequest):
 
     prompt = result["image_prompt"] or req.message
     with _conv_lock:
-        conv["messages"].append({"role": "assistant", "content": f"(已整理提示詞) {prompt}"})
-        conv["image_prompt"] = prompt
+        updated_messages = [*history, {"role": "assistant", "content": f"(已整理提示詞) {prompt}"}]
+        save_conversation_record(req.conversation_id, updated_messages, prompt)
 
     if source is not None:
         w, h, seed = source["width"], source["height"], source["seed"]
@@ -339,7 +349,7 @@ def list_images():
 
 @app.get("/api/v1/conversations/{conversation_id}")
 def show_conversation(conversation_id: str):
-    conv = _conversations.get(conversation_id)
+    conv = get_conversation_record(conversation_id)
     if conv is None:
         return error_response(404, "CONVERSATION_NOT_FOUND", "找不到指定的對話。")
     return conv

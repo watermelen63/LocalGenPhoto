@@ -18,6 +18,7 @@ API：
     之後接上生圖引擎時，只要改 run_image_engine() 這一個函式。
 """
 
+from contextlib import asynccontextmanager
 import json
 import threading
 import urllib.error
@@ -27,8 +28,24 @@ from typing import Literal
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
+
+try:
+    from database import (
+        DatabaseUnavailableError,
+        get_conversation_record,
+        init_db,
+        save_conversation_record,
+    )
+except ImportError:
+    from Background.database import (
+        DatabaseUnavailableError,
+        get_conversation_record,
+        init_db,
+        save_conversation_record,
+    )
 
 OLLAMA_ENDPOINT = "http://127.0.0.1:11434/api/chat"
 MODEL_NAME = "qwen3.5:4b"  # 本機 Ollama 目前裝的模型；UI 那邊寫的是 qwen3:4b
@@ -48,7 +65,20 @@ TRANSLATE_PROMPT = """你是生圖提示詞翻譯器。把使用者給的「圖�
 - 忠實翻譯，不要增刪或改寫使用者要表達的內容；已經是英文的部分原樣保留。
 - 風格若為「不指定」或空白，style 輸出空字串。"""
 
-app = FastAPI(title="Local ImageGen LLM API")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_db(raise_on_error=False)
+    yield
+
+
+app = FastAPI(title="Local ImageGen LLM API", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ---------------------------------------------------------------------------
@@ -117,17 +147,22 @@ async def on_validation_error(_: Request, exc: RequestValidationError):
     return error_response(400, "INVALID_REQUEST", f"{loc}: {first.get('msg', '格式錯誤')}")
 
 
+@app.exception_handler(DatabaseUnavailableError)
+async def on_db_error(_: Request, exc: DatabaseUnavailableError):
+    return error_response(503, "DATABASE_UNAVAILABLE", str(exc), retryable=True)
+
+
 # ---------------------------------------------------------------------------
-# 對話狀態（Conversation Manager，目前放記憶體）
+# 對話狀態（Conversation Manager，存於 PostgreSQL conversations 表）
 # ---------------------------------------------------------------------------
-_conversations: dict[str, dict] = {}
 _lock = threading.Lock()
 
 
 def get_conversation(conversation_id: str) -> dict:
-    return _conversations.setdefault(
-        conversation_id, {"messages": [], "image_prompt": None}
-    )
+    existing = get_conversation_record(conversation_id)
+    if existing is not None:
+        return existing
+    return {"conversation_id": conversation_id, "messages": [], "image_prompt": None}
 
 
 # ---------------------------------------------------------------------------
@@ -211,19 +246,17 @@ def image_generation(req: ChatRequest | SingleGenerationRequest):
 
     with _lock:
         conv = get_conversation(req.conversation_id)
-        conv["messages"].append({"role": "user", "content": user_text})
-        history = list(conv["messages"])
+        history = [*conv["messages"], {"role": "user", "content": user_text}]
 
     try:
         result = call_llm(history)
     except LLMError as err:
-        with _lock:
-            conv["messages"].pop()  # 這一輪失敗，不把使用者訊息留在紀錄裡
         return error_response(503, "LLM_UNAVAILABLE", str(err), retryable=True)
 
     if result["need_more_info"] and result["question"]:
         with _lock:
-            conv["messages"].append({"role": "assistant", "content": result["question"]})
+            updated_messages = [*history, {"role": "assistant", "content": result["question"]}]
+            save_conversation_record(req.conversation_id, updated_messages, conv["image_prompt"])
         return {
             "request_id": new_request_id(),
             "status": "needs_clarification",
@@ -235,8 +268,8 @@ def image_generation(req: ChatRequest | SingleGenerationRequest):
     # 資訊足夠：保存整理好的提示詞，交給生圖引擎
     image_prompt = result["image_prompt"] or req.message
     with _lock:
-        conv["messages"].append({"role": "assistant", "content": f"(已整理提示詞) {image_prompt}"})
-        conv["image_prompt"] = image_prompt
+        updated_messages = [*history, {"role": "assistant", "content": f"(已整理提示詞) {image_prompt}"}]
+        save_conversation_record(req.conversation_id, updated_messages, image_prompt)
     try:
         images = run_image_engine(image_prompt, req)
     except NotImplementedError:
@@ -253,7 +286,7 @@ def image_generation(req: ChatRequest | SingleGenerationRequest):
 
 @app.get("/api/v1/conversations/{conversation_id}")
 def show_conversation(conversation_id: str):
-    conv = _conversations.get(conversation_id)
+    conv = get_conversation_record(conversation_id)
     if conv is None:
         return error_response(404, "CONVERSATION_NOT_FOUND", "找不到指定的對話。")
     return conv
