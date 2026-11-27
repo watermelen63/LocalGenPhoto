@@ -783,6 +783,13 @@
                 gap: 12px;
             }
         }
+        .preview-result {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            border-radius: 8px;
+        }
+
     </style>
 </head>
 
@@ -980,7 +987,7 @@
                        class="creation-status"
                        role="status"
                        aria-live="polite">
-                        目前尚未連接圖片生成模型。
+                        填好設定後按下生成。
                     </p>
 
                 </form>
@@ -1025,7 +1032,7 @@
 
                 <footer class="preview-footer">
                     <i class="fa-solid fa-circle-info"></i>
-                    <span>目前為介面原型，尚未連接圖片生成模型。</span>
+                    <span>提示詞會先翻譯成英文，再交給本地模型生圖。</span>
                 </footer>
 
             </section>
@@ -1090,6 +1097,44 @@
            1. 載入資料
         ========================= */
 
+        function normalizeSession(session) {
+            return {
+                id: String(session.id || Date.now()),
+                mode: 'single',
+
+                title:
+                    typeof session.title === 'string' &&
+                    session.title.trim()
+                        ? session.title
+                        : '單次生成圖片',
+
+                titleEdited: Boolean(session.titleEdited),
+
+                createdAt:
+                    Number(session.createdAt) || 0,
+
+                promptText:
+                    typeof session.promptText === 'string'
+                        ? session.promptText
+                        : '',
+
+                prompt: session.prompt || '',
+                style: session.style || '',
+                proportion: session.proportion || '',
+                resolution: session.resolution || '',
+                num: session.num || '',
+                example: session.example || '',
+
+                images: Array.isArray(session.images)
+                    ? session.images.filter(image =>
+                        image &&
+                        typeof image.url === 'string' &&
+                        image.url
+                    )
+                    : []
+            };
+        }
+
         function loadSingleSessions() {
             try {
                 const stored = JSON.parse(
@@ -1104,41 +1149,7 @@
                     .filter(session =>
                         session && session.mode === 'single'
                     )
-                    .map(session => ({
-                        id: String(session.id || Date.now()),
-                        mode: 'single',
-
-                        title:
-                            typeof session.title === 'string' &&
-                            session.title.trim()
-                                ? session.title
-                                : '單次生成圖片',
-
-                        titleEdited: Boolean(session.titleEdited),
-
-                        createdAt:
-                            Number(session.createdAt) || Date.now(),
-
-                        promptText:
-                            typeof session.promptText === 'string'
-                                ? session.promptText
-                                : '',
-
-                        prompt: session.prompt || '',
-                        style: session.style || '',
-                        proportion: session.proportion || '',
-                        resolution: session.resolution || '',
-                        num: session.num || '',
-                        example: session.example || '',
-
-                        images: Array.isArray(session.images)
-                            ? session.images.filter(image =>
-                                image &&
-                                typeof image.url === 'string' &&
-                                image.url
-                            )
-                            : []
-                    }));
+                    .map(normalizeSession);
 
             } catch (error) {
                 console.warn('讀取圖片生成紀錄失敗：', error);
@@ -1215,13 +1226,49 @@
         // 後端位址（需先啟動 Background/server.py）
         const API_BASE = 'http://127.0.0.1:8000';
 
-        function saveState() {
+        // 已刪除的紀錄 id：避免合併時又從檔案裡跑回來
+        function loadDeletedIds() {
+            try {
+                return new Set(JSON.parse(
+                    localStorage.getItem('deleted_session_ids') || '[]'
+                ));
+            } catch (error) {
+                return new Set();
+            }
+        }
+
+        const deletedIds = loadDeletedIds();
+
+        // 成功讀過檔案之後才允許寫入，避免蓋掉檔案裡的紀錄
+        let fileMerged = false;
+        let mergePromise = null;
+
+        // 啟動時自動建立的空白紀錄
+        let autoCreatedSession = null;
+
+        function saveLocal() {
             localStorage.setItem(
                 'gemini_chat_sessions',
                 JSON.stringify(state.sessions)
             );
+            localStorage.setItem(
+                'deleted_session_ids',
+                JSON.stringify([...deletedIds])
+            );
+        }
 
-            // 同步寫入 data/chat_sessions.json（後端沒開時只在主控台警告）
+        function saveState() {
+            saveLocal();
+
+            if (fileMerged) {
+                writeFile();
+            } else {
+                mergeFromFile();
+            }
+        }
+
+        // 寫入 data/chat_sessions.json（後端沒開時只在主控台警告）
+        function writeFile() {
             fetch(`${API_BASE}/sessions`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
@@ -1233,6 +1280,119 @@
             }).catch(error => {
                 console.warn('無法寫入 chat_sessions.json：', error);
             });
+        }
+
+        // 讀取檔案並併入目前紀錄；同一個 id 以瀏覽器的內容為準
+        function mergeFromFile() {
+            mergePromise ??= fetch(`${API_BASE}/sessions`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(stored => {
+                    if (!Array.isArray(stored)) {
+                        throw new Error('檔案內容不是陣列');
+                    }
+
+                    applyFileSessions(stored
+                        .filter(session => session && session.id)
+                        .map(normalizeSession)
+                        .filter(session => !deletedIds.has(session.id)));
+
+                    keepOneSession();
+                    if (!singlePrompt.value) {
+                        singlePrompt.value =
+                            getCurrentSession()?.promptText || '';
+                    }
+                    renderSidebar();
+                    renderGallery();
+                    renderPreview();
+
+                    fileMerged = true;
+                    saveLocal();
+                    writeFile();
+                })
+                .catch(error => {
+                    console.warn(
+                        '無法讀取 chat_sessions.json，暫不寫入：', error
+                    );
+                })
+                .finally(() => {
+                    mergePromise = null;
+                });
+        }
+
+        // 目前只用一筆紀錄：有內容的優先，其次取最新的；其他筆的圖片併進來
+        function keepOneSession() {
+            if (state.sessions.length === 0) return;
+
+            const hasContent = session =>
+                Boolean(session.promptText) || session.images.length > 0;
+
+            const [kept, ...others] = [...state.sessions].sort((a, b) =>
+                (hasContent(b) - hasContent(a)) ||
+                (b.createdAt - a.createdAt)
+            );
+
+            others.forEach(other => {
+                other.images
+                    .filter(image =>
+                        !kept.images.some(item => item.url === image.url)
+                    )
+                    .forEach(image => kept.images.push(image));
+            });
+
+            state.sessions = [kept];
+            state.currentSessionId = kept.id;
+        }
+
+        function applyFileSessions(fileSessions) {
+            if (fileSessions.length === 0) return;
+
+            // 有舊紀錄可用時，丟掉剛剛自動建立、還沒用過的空白紀錄
+            const blank = autoCreatedSession;
+
+            if (
+                blank &&
+                !blank.promptText &&
+                !blank.titleEdited &&
+                blank.images.length === 0 &&
+                !singlePrompt.value
+            ) {
+                state.sessions = state.sessions.filter(
+                    session => session !== blank
+                );
+            }
+
+            fileSessions.forEach(fileSession => {
+                const local = state.sessions.find(
+                    session => session.id === fileSession.id
+                );
+
+                if (!local) {
+                    state.sessions.push(fileSession);
+                    return;
+                }
+
+                fileSession.images
+                    .filter(image =>
+                        !local.images.some(item => item.url === image.url)
+                    )
+                    .forEach(image => local.images.push(image));
+            });
+
+            state.sessions.sort((a, b) => b.createdAt - a.createdAt);
+
+            if (!getCurrentSession()) {
+                state.currentSessionId = state.sessions[0].id;
+                singlePrompt.value = state.sessions[0].promptText || '';
+            }
+
+            renderSidebar();
+            renderGallery();
+            renderPreview();
         }
 
         /* =========================
@@ -1298,7 +1458,7 @@
 
             singlePrompt.value = '';
             singleCreateStatus.textContent =
-                '目前尚未連接圖片生成模型。';
+                '填好設定後按下生成。';
 
             previewState.textContent = '尚未生成';
 
@@ -1323,6 +1483,7 @@
             saveState();
             renderSidebar();
             showSingleCreateView();
+            renderPreview();
         }
 
         /* =========================
@@ -1511,6 +1672,8 @@ titleText.replaceWith(input);
 
         function deleteSession(id) {
 
+    deletedIds.add(id);
+
     // 直接刪除創作紀錄
     state.sessions = state.sessions.filter(
         session => session.id !== id
@@ -1539,6 +1702,7 @@ titleText.replaceWith(input);
     renderGallery();
 
     showSingleCreateView();
+    renderPreview();
 }
 
         /* =========================
@@ -1751,6 +1915,8 @@ titleText.replaceWith(input);
         singleCreateForm.addEventListener('submit', event => {
             event.preventDefault();
 
+            if (isGenerating) return;
+
             const promptText = singlePrompt.value.trim();
 
             /* 先檢查提示詞 */
@@ -1820,31 +1986,142 @@ titleText.replaceWith(input);
             saveState();
             renderSidebar();
 
-            singleCreateStatus.textContent =
-                `提示詞已讀取。風格：${styleText}；比例：${ratio}；解析度：${resolution}；數量：${count} 張。目前尚未連接圖片生成模型。`;
-
-            previewState.textContent = '尚未生成';
-
-            /* 保留資料供未來 API 串接 */
-
-            console.log('圖片提示詞：', promptText);
-            console.log('圖片比例：', ratio);
-            console.log('圖片風格：', styleText);
-            console.log('解析度：', resolution);
-            console.log('生成數量：', count);
-            console.log(
-                '參考圖片：',
-                referenceImageInput.files[0] || null
-            );
+            generateImages(currentSession, {
+                flow: false,
+                prompt: promptText,
+                style: styleText,
+                aspect_ratio: toAspectRatio(ratio),
+                resolution: toSize(ratio, Number(resolution)),
+                count: 1
+            }, Number(count), Boolean(referenceImageInput.files[0]));
         });
+
+        /* =========================
+           呼叫 image_api.py：翻譯 → 生圖 → 存到 data/photo
+        ========================= */
+
+        // 後端位址（需先啟動 Background/image_api.py 和 server.py）
+        const IMAGE_API = 'http://127.0.0.1:8002';
+        let isGenerating = false;
+
+        function toAspectRatio(ratio) {
+            const [width, height] = ratio.split(':').map(Number);
+            return { width, height };
+        }
+
+        // 解析度當作長邊，另一邊依比例換算
+        function toSize(ratio, longSide) {
+            const { width, height } = toAspectRatio(ratio);
+            const scale = longSide / Math.max(width, height);
+
+            return {
+                width: Math.round(width * scale),
+                height: Math.round(height * scale)
+            };
+        }
+
+        // 右側預覽顯示目前這筆創作的圖片
+        function renderPreview() {
+            const canvas = document.getElementById('preview-canvas');
+            const emptyState = canvas.querySelector('.preview-empty-state');
+            const images = getCurrentSession()?.images || [];
+
+            canvas.querySelectorAll('.preview-result')
+                .forEach(element => element.remove());
+
+            emptyState.style.display = images.length ? 'none' : '';
+
+            images.slice(-4).forEach(image => {
+                const img = document.createElement('img');
+
+                img.className = 'preview-result';
+                img.src = image.url;
+                img.alt = '生成圖片';
+
+                canvas.appendChild(img);
+            });
+
+            previewState.textContent =
+                images.length ? '已生成' : '尚未生成';
+        }
+
+        // 一次只要一張：生圖很久，分開送可避免瀏覽器等太久逾時
+        async function generateImages(session, payload, total, hasReference) {
+            const button = singleCreateForm.querySelector('.btn-generate');
+            const note = hasReference ? '（參考圖片尚未支援，本次不使用）' : '';
+            let done = 0;
+
+            isGenerating = true;
+            button.disabled = true;
+
+            try {
+                for (let i = 1; i <= total; i++) {
+                    singleCreateStatus.textContent =
+                        `翻譯並生成第 ${i}/${total} 張，可能需要幾分鐘…${note}`;
+                    previewState.textContent = '生成中';
+
+                    const response = await fetch(
+                        `${IMAGE_API}/api/v1/image-generation`,
+                        {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        }
+                    );
+
+                    const result = await response.json();
+
+                    if (!response.ok || result.status !== 'completed') {
+                        throw new Error(
+                            result.error?.message || `HTTP ${response.status}`
+                        );
+                    }
+
+                    // 生成期間這筆紀錄可能已被刪除
+                    if (!state.sessions.includes(session)) return;
+
+                    result.images.forEach(item => {
+                        session.images.push({
+                            url: `${IMAGE_API}${item.url}`,
+                            createdAt: Date.now()
+                        });
+                        done++;
+                    });
+
+                    saveState();
+                    renderGallery();
+                    renderPreview();
+                }
+
+                singleCreateStatus.textContent =
+                    `完成，共生成 ${done} 張。${note}`;
+
+            } catch (error) {
+                console.error('生成失敗：', error);
+
+                const reason = error instanceof TypeError
+                    ? '無法連線到 image_api.py，請確認後端已啟動。'
+                    : error.message;
+
+                singleCreateStatus.textContent =
+                    `生成失敗（已完成 ${done}/${total} 張）：${reason}`;
+                previewState.textContent = '生成失敗';
+
+            } finally {
+                isGenerating = false;
+                button.disabled = false;
+            }
+        }
 
         /* =========================
            17. 初始化
         ========================= */
 
         function init() {
+            keepOneSession();
+
             if (state.sessions.length === 0) {
-                createNewSession();
+                autoCreatedSession = createNewSession();
             } else {
                 state.currentSessionId =
                     state.sessions[0].id;
@@ -1860,6 +2137,7 @@ titleText.replaceWith(input);
             }
 
             renderSidebar();
+            renderPreview();
             showSingleCreateView();
         }
 

@@ -37,6 +37,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from llm_api import (
@@ -70,6 +71,14 @@ PHOTO_DIR = DATA_DIR / "photo"
 PHOTO_JSON = DATA_DIR / "photo.json"
 
 app = FastAPI(title="Local ImageGen API (contract v1.0.0)")
+
+# 前端 HTML 若是直接用檔案開啟（file://）也要能呼叫 API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.exception_handler(RequestValidationError)
